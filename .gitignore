@@ -1,0 +1,20 @@
+# https://help.github.com/en/articles/ignoring-files
+
+# testing
+testing.*
+test.*
+settings.json
+
+# cache
+__pycache__/
+*.pyc
+
+# environment
+.env
+
+# misc
+.DS_Store
+
+# build artifacts
+build/
+dist/
