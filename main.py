@@ -6,13 +6,19 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                             QMenuBar, QMenu, QAction, QMessageBox, QFrame)
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QPalette, QColor
+import configparser
+from pathlib import Path
 
 class ParquetViewer(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Parquet File Viewer")
         self.setGeometry(100, 100, 800, 600)
-        self.dark_mode = False
+        
+        # Initialize config
+        self.config = configparser.ConfigParser()
+        self.config_file = os.path.join(os.path.expanduser('~'), 'Documents', 'parquet_viewer.ini')
+        self.load_settings()
         
         # Create menu bar
         self.create_menu_bar()
@@ -52,9 +58,28 @@ class ParquetViewer(QMainWindow):
         self.dark_mode_action.triggered.connect(self.toggle_dark_mode)
         settings_menu.addAction(self.dark_mode_action)
     
+    def load_settings(self):
+        """Load settings from config file"""
+        if os.path.exists(self.config_file):
+            self.config.read(self.config_file)
+            self.dark_mode = self.config.getboolean('Settings', 'dark_mode', fallback=False)
+        else:
+            self.dark_mode = False
+            self.save_settings()
+
+    def save_settings(self):
+        """Save current settings to config file"""
+        if not self.config.has_section('Settings'):
+            self.config.add_section('Settings')
+        self.config.set('Settings', 'dark_mode', str(self.dark_mode))
+        
+        with open(self.config_file, 'w') as f:
+            self.config.write(f)
+
     def toggle_dark_mode(self):
         self.dark_mode = self.dark_mode_action.isChecked()
         self.apply_theme()
+        self.save_settings()  # Save settings when dark mode is toggled
     
     def apply_theme(self):
         if self.dark_mode:
