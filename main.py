@@ -5,7 +5,7 @@ import pandas as pd
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                             QPushButton, QFileDialog, QTableWidget, QTableWidgetItem,
                             QMenuBar, QMenu, QAction, QMessageBox, QFrame, QDialog, QLineEdit, QDialogButtonBox,
-                            QLabel, QStatusBar, QTableWidgetSelectionRange)
+                            QLabel, QStatusBar, QTableWidgetSelectionRange, QComboBox)
 from PyQt5.QtCore import Qt, QPoint, QTimer
 from PyQt5.QtGui import QPalette, QColor, QCursor, QBrush
 import configparser
@@ -30,7 +30,14 @@ class EditCommand:
             # Update table
             item = table.item(row, col)
             if item:
-                item.setText(str(old_value) if pd.notna(old_value) else '')
+                if pd.notna(old_value):
+                    if isinstance(old_value, (int, float)):
+                        item.setText(f"{old_value:,}")
+                        item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                    else:
+                        item.setText(str(old_value))
+                else:
+                    item.setText('')
 
     def redo(self, table: QTableWidget, df: pd.DataFrame):
         for row, col, _, new_value in self.changes:
@@ -39,7 +46,14 @@ class EditCommand:
             # Update table
             item = table.item(row, col)
             if item:
-                item.setText(str(new_value) if pd.notna(new_value) else '')
+                if pd.notna(new_value):
+                    if isinstance(new_value, (int, float)):
+                        item.setText(f"{new_value:,}")
+                        item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                    else:
+                        item.setText(str(new_value))
+                else:
+                    item.setText('')
 
 class CommandStack:
     def __init__(self):
@@ -238,6 +252,13 @@ class ParquetViewer(QMainWindow):
         
         # File menu
         self.file_menu = menubar.addMenu("File")
+        
+        # New file action
+        new_action = QAction("New Parquet File", self)
+        new_action.setShortcut("Ctrl+N")
+        new_action.triggered.connect(self.create_new_file)
+        self.file_menu.addAction(new_action)
+        
         open_action = QAction("Open Parquet File", self)
         open_action.setShortcut("Ctrl+O")
         open_action.triggered.connect(self.open_file)
@@ -271,6 +292,12 @@ class ParquetViewer(QMainWindow):
         edit_menu.addAction(self.cut_action)
         edit_menu.addAction(self.copy_action)
         edit_menu.addAction(self.paste_action)
+        
+        # Add Column action
+        edit_menu.addSeparator()
+        add_column_action = QAction("Add Column...", self)
+        add_column_action.triggered.connect(self.add_new_column)
+        edit_menu.addAction(add_column_action)
         
         # Settings menu
         settings_menu = menubar.addMenu("Settings")
@@ -639,16 +666,34 @@ class ParquetViewer(QMainWindow):
         event.accept()
 
     def show_context_menu(self, position):
-        """Show context menu for copying cell contents"""
+        """Show context menu for table cells"""
         menu = QMenu()
-        copy_action = menu.addAction("Copy")
         
-        # Get selected items
-        selected_items = self.table.selectedItems()
-        if selected_items:
+        # Get the item at the position
+        item = self.table.itemAt(position)
+        if item:
+            row = item.row()
+            
+            copy_action = menu.addAction("Copy")
+            if self.edit_mode:
+                menu.addSeparator()
+                cut_action = menu.addAction("Cut")
+                paste_action = menu.addAction("Paste")
+                menu.addSeparator()
+                delete_row_action = menu.addAction("Delete Row")
+                delete_row_action.setEnabled(row < self.table.rowCount() - 1)  # Disable for totals row
+            
             action = menu.exec_(self.table.viewport().mapToGlobal(position))
+            
             if action == copy_action:
                 self.show_context_menu_copy()
+            elif self.edit_mode:
+                if action == cut_action:
+                    self.cut_cells()
+                elif action == paste_action:
+                    self.paste_cells()
+                elif action == delete_row_action:
+                    self.delete_row(row)
 
     def show_context_menu_copy(self):
         """Handle copying of selected cells"""
@@ -757,13 +802,6 @@ class ParquetViewer(QMainWindow):
         
         menu = QMenu()
         
-        # Get unique values in the column
-        values = set()
-        for row in range(self.table.rowCount()):
-            item = self.table.item(row, column)
-            if item:
-                values.add(item.text())
-        
         # Add filter options
         filter_action = menu.addAction("Filter...")
         clear_action = menu.addAction("Clear Filter")
@@ -771,6 +809,11 @@ class ParquetViewer(QMainWindow):
         menu.addSeparator()
         clear_all_filters_action = menu.addAction("Clear All Filters")
         clear_all_sort_action = menu.addAction("Clear All Sorting")
+        
+        # Add delete column option
+        menu.addSeparator()
+        delete_column_action = menu.addAction("Delete Column")
+        delete_column_action.setEnabled(self.edit_mode)
         
         # Show current filter if exists
         current_filter = self.filters.get(column)
@@ -786,7 +829,7 @@ class ParquetViewer(QMainWindow):
         if action == filter_action:
             # Show filter dialog
             dialog = QDialog(self)
-            dialog.setWindowFlags(dialog.windowFlags() & ~Qt.WindowContextHelpButtonHint)  # Remove help button
+            dialog.setWindowFlags(dialog.windowFlags() & ~Qt.WindowContextHelpButtonHint)
             dialog.setWindowTitle(f"Filter Column: {self.table.horizontalHeaderItem(column).text().replace(' 🔍', '')}")
             layout = QVBoxLayout(dialog)
             
@@ -821,6 +864,8 @@ class ParquetViewer(QMainWindow):
             self.clear_all_filters()
         elif action == clear_all_sort_action:
             self.clear_sorting()
+        elif action == delete_column_action:
+            self.delete_column(column)
 
     def update_header_style(self):
         """Update header style to show filtered columns"""
@@ -890,6 +935,10 @@ class ParquetViewer(QMainWindow):
 
     def open_recent_file(self, file_path):
         """Open a file from the recent files menu"""
+        # Check for unsaved changes first
+        if not self.check_unsaved_changes():
+            return
+            
         if os.path.exists(file_path):
             # Close all menus before opening the file
             self.file_menu.hide()
@@ -1019,6 +1068,10 @@ class ParquetViewer(QMainWindow):
             self.updating_totals = False
 
     def open_file(self):
+        # Check for unsaved changes first
+        if not self.check_unsaved_changes():
+            return
+            
         # Check if last folder exists, if not use Documents
         if not os.path.exists(self.last_folder):
             self.last_folder = os.path.join(os.path.expanduser('~'), 'Documents')
@@ -1422,23 +1475,11 @@ class ParquetViewer(QMainWindow):
 
     def revert_all_changes(self):
         """Revert all changes to the original state"""
-        if not self.original_df is None:
-            # Revert all modified cells
-            for row, col in self.modified_cells:
-                value = self.original_df.iloc[row, col]
-                item = self.table.item(row, col)
-                if item:
-                    item.setText(str(value) if pd.notna(value) else '')
-            
-            # Clear tracking states
-            self.modified = False
-            self.modified_cells.clear()
-            self.command_stack.clear()
-            
-            # Update UI
-            self.save_action.setEnabled(False)
-            self.update_undo_redo_state()
-            self.update_status_bar()
+        if self.current_file and os.path.exists(self.current_file):
+            # Reload the file from disk
+            self.load_parquet_file(self.current_file)
+        else:
+            QMessageBox.warning(self, "Error", "Cannot revert changes: original file not found.")
 
     def toggle_selection_highlight(self):
         """Toggle the highlight of copied cells"""
@@ -1736,6 +1777,232 @@ class ParquetViewer(QMainWindow):
         sum_val = sum(numeric_values)
         avg = sum_val / count
         self.stats_bar.update_stats((count, sum_val, avg))
+
+    def check_unsaved_changes(self):
+        """Check for unsaved changes and handle them
+        Returns:
+            bool: True if it's safe to proceed, False if operation should be cancelled
+        """
+        if self.modified:
+            msg_box = QMessageBox()
+            msg_box.setWindowTitle("Save Changes?")
+            msg_box.setText("You have unsaved changes. What would you like to do?")
+            
+            save_btn = msg_box.addButton("&Save", QMessageBox.AcceptRole)
+            discard_btn = msg_box.addButton("&Discard", QMessageBox.DestructiveRole)
+            cancel_btn = msg_box.addButton("&Cancel", QMessageBox.RejectRole)
+            msg_box.setDefaultButton(save_btn)
+            msg_box.setEscapeButton(cancel_btn)
+            
+            msg_box.exec_()
+            clicked_button = msg_box.clickedButton()
+            
+            if clicked_button == save_btn:
+                return self.save_file()
+            elif clicked_button == discard_btn:
+                return True
+            else:  # Cancel
+                return False
+        return True
+
+    def delete_column(self, column):
+        """Delete a column from the table and DataFrame"""
+        if not self.edit_mode:
+            return
+            
+        msg_box = QMessageBox()
+        msg_box.setWindowTitle("Confirm Column Deletion")
+        column_name = self.table.horizontalHeaderItem(column).text()
+        msg_box.setText(f"Are you sure you want to delete the column '{column_name}'?")
+        
+        yes_btn = msg_box.addButton("&Yes", QMessageBox.YesRole)
+        no_btn = msg_box.addButton("&No", QMessageBox.NoRole)
+        msg_box.setDefaultButton(no_btn)
+        
+        msg_box.exec_()
+        if msg_box.clickedButton() == yes_btn:
+            # Delete from DataFrame
+            self.original_df = self.original_df.drop(columns=[column_name])
+            
+            # Delete from table
+            self.table.removeColumn(column)
+            
+            # Update modified state
+            self.modified = True
+            self.save_action.setEnabled(True)
+            self.update_status_bar()
+            
+            # Update column totals
+            self.update_column_totals()
+
+    def delete_row(self, row):
+        """Delete a row from the table and DataFrame"""
+        if not self.edit_mode or row >= self.table.rowCount() - 1:  # Don't delete totals row
+            return
+            
+        msg_box = QMessageBox()
+        msg_box.setWindowTitle("Confirm Row Deletion")
+        msg_box.setText(f"Are you sure you want to delete row {row + 1}?")
+        
+        yes_btn = msg_box.addButton("&Yes", QMessageBox.YesRole)
+        no_btn = msg_box.addButton("&No", QMessageBox.NoRole)
+        msg_box.setDefaultButton(no_btn)
+        
+        msg_box.exec_()
+        if msg_box.clickedButton() == yes_btn:
+            # Delete from DataFrame
+            self.original_df = self.original_df.drop(index=self.original_df.index[row])
+            
+            # Delete from table
+            self.table.removeRow(row)
+            
+            # Update modified state
+            self.modified = True
+            self.save_action.setEnabled(True)
+            self.update_status_bar()
+            
+            # Update column totals
+            self.update_column_totals()
+
+    def add_new_column(self):
+        """Add a new column to the table and DataFrame"""
+        if not self.edit_mode:
+            return
+            
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Add New Column")
+        layout = QVBoxLayout(dialog)
+        
+        # Column name input
+        name_label = QLabel("Column Name:")
+        layout.addWidget(name_label)
+        name_input = QLineEdit()
+        layout.addWidget(name_input)
+        
+        # Data type selection
+        type_label = QLabel("Data Type:")
+        layout.addWidget(type_label)
+        type_combo = QComboBox()
+        type_combo.addItems(["Text", "Integer", "Float", "Boolean", "DateTime"])
+        layout.addWidget(type_combo)
+        
+        # Default value input
+        default_label = QLabel("Default Value (optional):")
+        layout.addWidget(default_label)
+        default_input = QLineEdit()
+        layout.addWidget(default_input)
+        
+        # Buttons
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        
+        if dialog.exec_() == QDialog.Accepted:
+            column_name = name_input.text().strip()
+            if not column_name:
+                QMessageBox.warning(self, "Error", "Column name cannot be empty.")
+                return
+                
+            # Check if column name already exists
+            if column_name in self.original_df.columns:
+                QMessageBox.warning(self, "Error", "Column name already exists.")
+                return
+                
+            # Get data type
+            dtype_map = {
+                "Text": "object",
+                "Integer": "int64",
+                "Float": "float64",
+                "Boolean": "bool",
+                "DateTime": "datetime64[ns]"
+            }
+            dtype = dtype_map[type_combo.currentText()]
+            
+            # Get default value
+            default_value = default_input.text().strip()
+            try:
+                if default_value:
+                    if dtype == "int64":
+                        default_value = int(default_value)
+                    elif dtype == "float64":
+                        default_value = float(default_value)
+                    elif dtype == "bool":
+                        default_value = default_value.lower() in ['true', '1', 'yes']
+                    elif dtype == "datetime64[ns]":
+                        default_value = pd.to_datetime(default_value)
+                else:
+                    default_value = None
+            except (ValueError, TypeError) as e:
+                QMessageBox.warning(self, "Error", f"Invalid default value for selected type: {str(e)}")
+                return
+                
+            # Add to DataFrame
+            self.original_df[column_name] = pd.Series([default_value] * len(self.original_df), dtype=dtype)
+            self.column_types[column_name] = dtype
+            
+            # Add to table
+            col_idx = self.table.columnCount()
+            self.table.insertColumn(col_idx)
+            self.table.setHorizontalHeaderItem(col_idx, QTableWidgetItem(column_name))
+            
+            # Populate column
+            for row in range(self.table.rowCount() - 1):  # Exclude totals row
+                item = QTableWidgetItem()
+                if default_value is not None:
+                    if isinstance(default_value, (int, float)):
+                        item.setText(f"{default_value:,}")
+                        item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                    else:
+                        item.setText(str(default_value))
+                self.table.setItem(row, col_idx, item)
+            
+            # Update modified state
+            self.modified = True
+            self.save_action.setEnabled(True)
+            self.update_status_bar()
+            
+            # Update column totals
+            self.update_column_totals()
+            
+            # Adjust column width
+            self.adjust_all_columns()
+
+    def create_new_file(self):
+        """Create a new empty parquet file"""
+        # Check for unsaved changes first
+        if not self.check_unsaved_changes():
+            return
+            
+        # Create an empty DataFrame
+        self.original_df = pd.DataFrame()
+        self.column_types = {}
+        
+        # Clear the table
+        self.table.clear()
+        self.table.setRowCount(1)  # Just the totals row
+        self.table.setColumnCount(0)
+        
+        # Reset state
+        self.current_file = None
+        self.modified = False
+        self.modified_cells.clear()
+        self.command_stack.clear()
+        self.filters.clear()
+        
+        # Update UI
+        self.setWindowTitle("Untitled - Parquet File Viewer")
+        self.save_action.setEnabled(False)
+        self.save_as_action.setEnabled(True)
+        self.update_status_bar()
+        
+        # Enable edit mode automatically for new files
+        self.edit_mode = True
+        self.edit_mode_action.setChecked(True)
+        self.update_status_bar()
+        
+        # Add initial column
+        self.add_new_column()
 
 def main():
     app = QApplication(sys.argv)
