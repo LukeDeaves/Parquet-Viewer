@@ -173,11 +173,11 @@ class ParquetViewer(QMainWindow):
         
         # Create table widget to display data
         self.table = QTableWidget()
-        self.table.setSortingEnabled(True)  # Enable sorting
-        self.table.setContextMenuPolicy(Qt.CustomContextMenu)  # Enable context menu
-        self.table.customContextMenuRequested.connect(self.show_context_menu)  # Connect context menu signal
-        self.table.setSelectionMode(QTableWidget.ExtendedSelection)  # Enable multiple cell selection
-        self.table.itemChanged.connect(self.on_cell_changed)  # Connect cell change signal
+        self.table.setSortingEnabled(False)  # Disable automatic sorting
+        self.table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self.show_context_menu)
+        self.table.setSelectionMode(QTableWidget.ExtendedSelection)
+        self.table.itemChanged.connect(self.on_cell_changed)
         
         # Configure headers for right-click menu
         header = self.table.horizontalHeader()
@@ -238,6 +238,9 @@ class ParquetViewer(QMainWindow):
         
         # Add flag to prevent recursive updates
         self.updating_totals = False
+        
+        # Store column sort states
+        self.column_sort_states = {}  # {column_index: is_ascending}
 
     def init_actions(self):
         """Initialize all actions"""
@@ -686,6 +689,8 @@ class ParquetViewer(QMainWindow):
             menu.addSeparator()
             cut_action = menu.addAction("Cut")
             paste_action = menu.addAction("Paste")
+            menu.addSeparator()
+            delete_action = menu.addAction("Delete")
         
         action = menu.exec_(self.table.viewport().mapToGlobal(position))
         
@@ -696,6 +701,8 @@ class ParquetViewer(QMainWindow):
                 self.cut_cells()
             elif action == paste_action:
                 self.paste_cells()
+            elif action == delete_action:
+                self.delete_selected_cell_contents()
 
     def show_context_menu_copy(self):
         """Handle copying of selected cells"""
@@ -830,10 +837,12 @@ class ParquetViewer(QMainWindow):
         
         menu.addSeparator()
         
-        # Add sort options
-        sort_asc_action = menu.addAction("Sort A to Z")
-        sort_desc_action = menu.addAction("Sort Z to A")
-        clear_sort_action = menu.addAction("Clear Sort")
+        # Add sort option
+        sort_action = menu.addAction("Sort")
+        if column in self.column_sort_states:
+            sort_action.setText("Sort (Z to A)" if self.column_sort_states[column] else "Sort (A to Z)")
+        else:
+            sort_action.setText("Sort (A to Z)")
         
         menu.addSeparator()
         
@@ -860,12 +869,8 @@ class ParquetViewer(QMainWindow):
             self.add_new_column(column + 1)
         elif action == delete_column_action:
             self.delete_column(column)
-        elif action == sort_asc_action:
-            self.table.sortItems(column, Qt.AscendingOrder)
-        elif action == sort_desc_action:
-            self.table.sortItems(column, Qt.DescendingOrder)
-        elif action == clear_sort_action:
-            self.clear_column_sort(column)
+        elif action == sort_action:
+            self.toggle_column_sort(column)
         elif action == filter_action:
             self.show_filter_dialog(column)
         elif action == clear_action:
@@ -874,6 +879,19 @@ class ParquetViewer(QMainWindow):
             self.update_header_style()
         elif action == clear_all_filters_action:
             self.clear_all_filters()
+
+    def toggle_column_sort(self, column):
+        """Toggle sort order for a column"""
+        if column in self.column_sort_states:
+            # Toggle sort order
+            self.column_sort_states[column] = not self.column_sort_states[column]
+            order = Qt.AscendingOrder if self.column_sort_states[column] else Qt.DescendingOrder
+        else:
+            # First sort - ascending
+            self.column_sort_states[column] = True
+            order = Qt.AscendingOrder
+        
+        self.table.sortItems(column, order)
 
     def show_row_menu(self, pos):
         """Show context menu for row operations"""
@@ -1227,6 +1245,86 @@ class ParquetViewer(QMainWindow):
                 QFrame[frameShape="4"] {
                     color: #444444;
                 }
+                QScrollBar:horizontal {
+                    border: none;
+                    background: #2b2b2b;
+                    height: 14px;
+                    margin: 0px 21px 0 21px;
+                }
+                QScrollBar::handle:horizontal {
+                    background: #3b3b3b;
+                    min-width: 25px;
+                    border-radius: 7px;
+                }
+                QScrollBar::handle:horizontal:hover {
+                    background: #4b4b4b;
+                }
+                QScrollBar::add-line:horizontal {
+                    border: none;
+                    background: #3b3b3b;
+                    width: 20px;
+                    border-top-right-radius: 7px;
+                    border-bottom-right-radius: 7px;
+                    subcontrol-position: right;
+                    subcontrol-origin: margin;
+                }
+                QScrollBar::sub-line:horizontal {
+                    border: none;
+                    background: #3b3b3b;
+                    width: 20px;
+                    border-top-left-radius: 7px;
+                    border-bottom-left-radius: 7px;
+                    subcontrol-position: left;
+                    subcontrol-origin: margin;
+                }
+                QScrollBar::add-line:horizontal:hover,
+                QScrollBar::sub-line:horizontal:hover {
+                    background: #4b4b4b;
+                }
+                QScrollBar::add-page:horizontal,
+                QScrollBar::sub-page:horizontal {
+                    background: none;
+                }
+                QScrollBar:vertical {
+                    border: none;
+                    background: #2b2b2b;
+                    width: 14px;
+                    margin: 21px 0 21px 0;
+                }
+                QScrollBar::handle:vertical {
+                    background: #3b3b3b;
+                    min-height: 25px;
+                    border-radius: 7px;
+                }
+                QScrollBar::handle:vertical:hover {
+                    background: #4b4b4b;
+                }
+                QScrollBar::add-line:vertical {
+                    border: none;
+                    background: #3b3b3b;
+                    height: 20px;
+                    border-bottom-left-radius: 7px;
+                    border-bottom-right-radius: 7px;
+                    subcontrol-position: bottom;
+                    subcontrol-origin: margin;
+                }
+                QScrollBar::sub-line:vertical {
+                    border: none;
+                    background: #3b3b3b;
+                    height: 20px;
+                    border-top-left-radius: 7px;
+                    border-top-right-radius: 7px;
+                    subcontrol-position: top;
+                    subcontrol-origin: margin;
+                }
+                QScrollBar::add-line:vertical:hover,
+                QScrollBar::sub-line:vertical:hover {
+                    background: #4b4b4b;
+                }
+                QScrollBar::add-page:vertical,
+                QScrollBar::sub-page:vertical {
+                    background: none;
+                }
             """)
             # Set dark palette for better contrast
             dark_palette = QPalette()
@@ -1299,50 +1397,34 @@ class ParquetViewer(QMainWindow):
                 return True
                 
             elif key in (Qt.Key_Return, Qt.Key_Enter):
-                # If we're not in edit mode, ignore
-                if not self.edit_mode:
-                    return False
-                    
                 current = self.table.currentItem()
                 if not current:
                     return False
                     
-                # If cell is already in edit mode, this will trigger the editor to close and accept
+                # If cell is already in edit mode, let it handle the event
                 if self.table.state() == QTableWidget.EditingState:
                     return False
                     
-                # Start editing the current cell
+                # If not in edit mode, start editing
+                if not self.edit_mode:
+                    self.edit_mode_action.trigger()
                 self.table.editItem(current)
                 return True
                 
-            elif key == Qt.Key_Delete:
-                # If we're not in edit mode, ignore
-                if not self.edit_mode:
-                    return False
-                    
-                # Get all selected items
-                selected_items = self.table.selectedItems()
-                if not selected_items:
-                    return False
-                    
-                # Clear the contents of all selected cells
-                for item in selected_items:
-                    row = item.row()
-                    col = item.column()
-                    
-                    # Update the DataFrame
-                    self.original_df.iloc[row, col] = None
-                    
-                    # Update the table item
-                    item.setText('')
-                    
-                    # Mark as modified
-                    self.modified = True
-                    self.modified_cells.add((row, col))
+            elif key == Qt.Key_F2:
+                current = self.table.currentItem()
+                if current and self.edit_mode:
+                    self.table.editItem(current)
+                    return True
                 
-                # Update UI
-                self.save_action.setEnabled(True)
-                self.update_status_bar()
+            elif key in (Qt.Key_Delete, Qt.Key_Backspace):
+                if not self.edit_mode:
+                    self.delete_selected_cell_contents()
+                    return True
+                
+        elif source == self.table and event.type() == event.MouseButtonDblClick:
+            if self.edit_mode and self.table.currentItem():
+                self.table.editItem(self.table.currentItem())
                 return True
                 
         elif source == self.table and event.type() == event.MouseButtonRelease:
@@ -1350,6 +1432,42 @@ class ParquetViewer(QMainWindow):
             self.calculate_selection_stats()
                 
         return super().eventFilter(source, event)
+
+    def delete_selected_cell_contents(self):
+        """Delete contents of selected cells"""
+        if not self.edit_mode:
+            return
+            
+        selected_items = self.table.selectedItems()
+        if not selected_items:
+            return
+            
+        changes = []
+        for item in selected_items:
+            row = item.row()
+            col = item.column()
+            old_value = self.original_df.iloc[row, col]
+            if pd.notna(old_value):  # Only record changes for non-empty cells
+                changes.append((row, col, old_value, None))
+        
+        if changes:
+            # Create and push single command for all changes
+            command = EditCommand(changes)
+            self.command_stack.push(command)
+            
+            # Apply all changes
+            for row, col, _, _ in changes:
+                self.original_df.iloc[row, col] = None
+                item = self.table.item(row, col)
+                if item:
+                    item.setText('')
+                self.modified_cells.add((row, col))
+            
+            self.modified = True
+            self.save_action.setEnabled(True)
+            self.update_undo_redo_state()
+            self.update_status_bar()
+            self.update_column_totals()
 
     def reset_view(self):
         """Reset the view by clearing filters and sorting"""
@@ -1845,10 +1963,13 @@ class ParquetViewer(QMainWindow):
             self.stats_bar.update_stats()
             return
             
+        total_cells = 0
         numeric_values = []
+        
         for range_ in selected_ranges:
             for row in range(range_.topRow(), range_.bottomRow() + 1):
                 for col in range(range_.leftColumn(), range_.rightColumn() + 1):
+                    total_cells += 1
                     item = self.table.item(row, col)
                     if item:
                         try:
@@ -1857,13 +1978,13 @@ class ParquetViewer(QMainWindow):
                         except (ValueError, TypeError):
                             continue
         
-        count = len(numeric_values)
-        if count == 0:
+        count = total_cells
+        if len(numeric_values) == 0:
             self.stats_bar.update_stats((count, None, None))
             return
             
         sum_val = sum(numeric_values)
-        avg = sum_val / count
+        avg = sum_val / len(numeric_values)
         self.stats_bar.update_stats((count, sum_val, avg))
 
     def check_unsaved_changes(self):
@@ -1898,10 +2019,26 @@ class ParquetViewer(QMainWindow):
         if not self.edit_mode:
             return
             
+        # Get all selected columns if any
+        selected_ranges = self.table.selectedRanges()
+        columns_to_delete = set()
+        column_names = []
+        
+        if selected_ranges:
+            for range_ in selected_ranges:
+                for col in range(range_.leftColumn(), range_.rightColumn() + 1):
+                    columns_to_delete.add(col)
+                    column_names.append(self.table.horizontalHeaderItem(col).text())
+        else:
+            columns_to_delete.add(column)
+            column_names.append(self.table.horizontalHeaderItem(column).text())
+            
+        if not columns_to_delete:
+            return
+            
         msg_box = QMessageBox()
         msg_box.setWindowTitle("Confirm Column Deletion")
-        column_name = self.table.horizontalHeaderItem(column).text()
-        msg_box.setText(f"Are you sure you want to delete the column '{column_name}'?")
+        msg_box.setText(f"Are you sure you want to delete {len(columns_to_delete)} column(s)?")
         
         yes_btn = msg_box.addButton("&Yes", QMessageBox.YesRole)
         no_btn = msg_box.addButton("&No", QMessageBox.NoRole)
@@ -1910,10 +2047,11 @@ class ParquetViewer(QMainWindow):
         msg_box.exec_()
         if msg_box.clickedButton() == yes_btn:
             # Delete from DataFrame
-            self.original_df = self.original_df.drop(columns=[column_name])
+            self.original_df = self.original_df.drop(columns=column_names)
             
-            # Delete from table
-            self.table.removeColumn(column)
+            # Delete from table (in reverse order to maintain indices)
+            for col in sorted(columns_to_delete, reverse=True):
+                self.table.removeColumn(col)
             
             # Update modified state
             self.modified = True
@@ -1952,12 +2090,26 @@ class ParquetViewer(QMainWindow):
 
     def delete_row(self, row):
         """Delete a row from the table and DataFrame"""
-        if not self.edit_mode or row >= self.table.rowCount() - 1:  # Don't delete totals row
+        if not self.edit_mode:
+            return
+            
+        # Get all selected rows if any
+        selected_ranges = self.table.selectedRanges()
+        rows_to_delete = set()
+        
+        if selected_ranges:
+            for range_ in selected_ranges:
+                for row in range(range_.topRow(), range_.bottomRow() + 1):
+                    rows_to_delete.add(row)
+        else:
+            rows_to_delete.add(row)
+            
+        if not rows_to_delete:
             return
             
         msg_box = QMessageBox()
         msg_box.setWindowTitle("Confirm Row Deletion")
-        msg_box.setText(f"Are you sure you want to delete row {row + 1}?")
+        msg_box.setText(f"Are you sure you want to delete {len(rows_to_delete)} row(s)?")
         
         yes_btn = msg_box.addButton("&Yes", QMessageBox.YesRole)
         no_btn = msg_box.addButton("&No", QMessageBox.NoRole)
@@ -1966,10 +2118,12 @@ class ParquetViewer(QMainWindow):
         msg_box.exec_()
         if msg_box.clickedButton() == yes_btn:
             # Delete from DataFrame
-            self.original_df = self.original_df.drop(index=self.original_df.index[row])
+            self.original_df = self.original_df.drop(index=sorted(rows_to_delete))
+            self.original_df.reset_index(drop=True, inplace=True)
             
-            # Delete from table
-            self.table.removeRow(row)
+            # Delete from table (in reverse order to maintain indices)
+            for row in sorted(rows_to_delete, reverse=True):
+                self.table.removeRow(row)
             
             # Update modified state
             self.modified = True
