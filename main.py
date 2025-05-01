@@ -32,6 +32,9 @@ class ParquetViewer(QMainWindow):
         
         # Create table widget to display data
         self.table = QTableWidget()
+        self.table.setSortingEnabled(True)  # Enable sorting
+        self.table.setContextMenuPolicy(Qt.CustomContextMenu)  # Enable context menu
+        self.table.customContextMenuRequested.connect(self.show_context_menu)  # Connect context menu signal
         layout.addWidget(self.table)
         
         # Apply initial theme
@@ -160,6 +163,19 @@ class ParquetViewer(QMainWindow):
             self.setStyleSheet("")  # Reset to default light theme
             self.setPalette(self.style().standardPalette())  # Reset to default palette
         
+    def show_context_menu(self, position):
+        """Show context menu for copying cell contents"""
+        menu = QMenu()
+        copy_action = menu.addAction("Copy")
+        
+        # Get the item at the clicked position
+        item = self.table.itemAt(position)
+        if item:
+            action = menu.exec_(self.table.viewport().mapToGlobal(position))
+            if action == copy_action:
+                # Copy the cell text to clipboard
+                QApplication.clipboard().setText(item.text())
+
     def open_file(self):
         file_name, _ = QFileDialog.getOpenFileName(
             self,
@@ -192,6 +208,9 @@ class ParquetViewer(QMainWindow):
                 
                 # Resize columns to fit content
                 self.table.resizeColumnsToContents()
+                
+                # Enable sorting after data is loaded
+                self.table.setSortingEnabled(True)
                 
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Error reading file: {e}")
