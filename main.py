@@ -179,20 +179,39 @@ class ParquetViewer(QMainWindow):
         self.table.setSelectionMode(QTableWidget.ExtendedSelection)  # Enable multiple cell selection
         self.table.itemChanged.connect(self.on_cell_changed)  # Connect cell change signal
         
-        # Configure header for right-click menu
+        # Configure headers for right-click menu
         header = self.table.horizontalHeader()
         header.setContextMenuPolicy(Qt.CustomContextMenu)
         header.customContextMenuRequested.connect(self.show_filter_menu)
         header.setSectionsClickable(True)
         header.sectionResized.connect(self.on_column_resize)
         
-        # Handle window resize events
-        self.table.horizontalHeader().setStretchLastSection(True)  # Prevent horizontal scrollbar by default
+        # Configure vertical header (row numbers) for right-click menu
+        v_header = self.table.verticalHeader()
+        v_header.setContextMenuPolicy(Qt.CustomContextMenu)
+        v_header.customContextMenuRequested.connect(self.show_row_menu)
         
-        # Install event filter for keyboard shortcuts
-        self.table.installEventFilter(self)
+        # Create totals widget
+        self.totals_widget = QTableWidget()
+        self.totals_widget.setMaximumHeight(25)  # Fixed height for totals
+        self.totals_widget.horizontalHeader().hide()
+        self.totals_widget.verticalHeader().hide()
+        self.totals_widget.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.totals_widget.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         
-        layout.addWidget(self.table)
+        # Connect horizontal scrollbars
+        self.table.horizontalScrollBar().valueChanged.connect(self.totals_widget.horizontalScrollBar().setValue)
+        self.totals_widget.horizontalScrollBar().valueChanged.connect(self.table.horizontalScrollBar().setValue)
+        
+        # Create a container widget for the table and totals
+        table_container = QWidget()
+        table_layout = QVBoxLayout(table_container)
+        table_layout.setContentsMargins(0, 0, 0, 0)
+        table_layout.setSpacing(0)
+        table_layout.addWidget(self.table)
+        table_layout.addWidget(self.totals_widget)
+        
+        layout.addWidget(table_container)
         
         # Add stats bar
         self.stats_bar = StatsBar()
@@ -215,7 +234,7 @@ class ParquetViewer(QMainWindow):
         
         # Add flag to prevent recursive updates
         self.updating_totals = False
-        
+
     def init_actions(self):
         """Initialize all actions"""
         # Undo/Redo actions
@@ -391,25 +410,13 @@ class ParquetViewer(QMainWindow):
             # If trying to exit edit mode with unsaved changes
             msg_box = QMessageBox()
             msg_box.setWindowTitle("Save Changes?")
-            msg_box.setText("You have unsaved changes. What would you like to do?")
+            msg_box.setText("The document has been modified. Do you want to save your changes?")
             
-            # Create custom buttons with keyboard shortcuts
             save_btn = msg_box.addButton("&Save", QMessageBox.AcceptRole)
             no_btn = msg_box.addButton("&No", QMessageBox.RejectRole)
             cancel_btn = msg_box.addButton("&Cancel", QMessageBox.RejectRole)
             msg_box.setDefaultButton(save_btn)
             msg_box.setEscapeButton(cancel_btn)
-            
-            # Force showing mnemonics (underlines)
-            msg_box.setStyle(QApplication.style())
-            msg_box.setStyleSheet("""
-                QPushButton {
-                    color: palette(text);
-                }
-                QPushButton::mnemonicLabel {
-                    text-decoration: underline;
-                }
-            """)
             
             msg_box.exec_()
             clicked_button = msg_box.clickedButton()
@@ -459,13 +466,6 @@ class ParquetViewer(QMainWindow):
             
         row = item.row()
         col = item.column()
-        
-        # Check if this is the totals row (last row)
-        if row == self.table.rowCount() - 1:
-            # Don't allow changes to totals row
-            self.update_column_totals()
-            return
-            
         new_value = item.text().strip()
         
         try:
@@ -502,12 +502,7 @@ class ParquetViewer(QMainWindow):
                 # Update the DataFrame
                 self.original_df.iloc[row, col] = converted_value
                 
-                # Mark as modified
-                self.modified = True
-                self.modified_cells.add((row, col))
-                self.save_action.setEnabled(True)
-                
-                # Update cell display with proper formatting
+                # Update the display format
                 if converted_value is not None:
                     if isinstance(converted_value, (int, float)):
                         item.setText(f"{converted_value:,}")
@@ -516,6 +511,11 @@ class ParquetViewer(QMainWindow):
                         item.setText(str(converted_value))
                 else:
                     item.setText('')
+                
+                # Mark as modified
+                self.modified = True
+                self.modified_cells.add((row, col))
+                self.save_action.setEnabled(True)
                 
                 # Update UI state
                 self.update_undo_redo_state()
@@ -633,23 +633,11 @@ class ParquetViewer(QMainWindow):
             msg_box.setWindowTitle("Save Changes?")
             msg_box.setText("The document has been modified. Do you want to save your changes?")
             
-            # Create custom buttons with keyboard shortcuts
             save_btn = msg_box.addButton("&Save", QMessageBox.AcceptRole)
             no_btn = msg_box.addButton("&No", QMessageBox.RejectRole)
             cancel_btn = msg_box.addButton("&Cancel", QMessageBox.RejectRole)
             msg_box.setDefaultButton(save_btn)
             msg_box.setEscapeButton(cancel_btn)
-            
-            # Force showing mnemonics (underlines)
-            msg_box.setStyle(QApplication.style())
-            msg_box.setStyleSheet("""
-                QPushButton {
-                    color: palette(text);
-                }
-                QPushButton::mnemonicLabel {
-                    text-decoration: underline;
-                }
-            """)
             
             msg_box.exec_()
             clicked_button = msg_box.clickedButton()
@@ -669,31 +657,21 @@ class ParquetViewer(QMainWindow):
         """Show context menu for table cells"""
         menu = QMenu()
         
-        # Get the item at the position
-        item = self.table.itemAt(position)
-        if item:
-            row = item.row()
-            
-            copy_action = menu.addAction("Copy")
-            if self.edit_mode:
-                menu.addSeparator()
-                cut_action = menu.addAction("Cut")
-                paste_action = menu.addAction("Paste")
-                menu.addSeparator()
-                delete_row_action = menu.addAction("Delete Row")
-                delete_row_action.setEnabled(row < self.table.rowCount() - 1)  # Disable for totals row
-            
-            action = menu.exec_(self.table.viewport().mapToGlobal(position))
-            
-            if action == copy_action:
-                self.show_context_menu_copy()
-            elif self.edit_mode:
-                if action == cut_action:
-                    self.cut_cells()
-                elif action == paste_action:
-                    self.paste_cells()
-                elif action == delete_row_action:
-                    self.delete_row(row)
+        copy_action = menu.addAction("Copy")
+        if self.edit_mode:
+            menu.addSeparator()
+            cut_action = menu.addAction("Cut")
+            paste_action = menu.addAction("Paste")
+        
+        action = menu.exec_(self.table.viewport().mapToGlobal(position))
+        
+        if action == copy_action:
+            self.show_context_menu_copy()
+        elif self.edit_mode:
+            if action == cut_action:
+                self.cut_cells()
+            elif action == paste_action:
+                self.paste_cells()
 
     def show_context_menu_copy(self):
         """Handle copying of selected cells"""
@@ -970,8 +948,8 @@ class ParquetViewer(QMainWindow):
             self.table.setColumnCount(len(self.df.columns))
             self.table.setHorizontalHeaderLabels(self.df.columns.astype(str))
             
-            # Set row count (add 1 for totals row)
-            self.table.setRowCount(len(self.df) + 1)
+            # Set row count
+            self.table.setRowCount(len(self.df))
             
             # Populate the table
             for i, col in enumerate(self.df.columns):
@@ -987,9 +965,6 @@ class ParquetViewer(QMainWindow):
                         else:
                             item.setText(str(val))
                     self.table.setItem(j, i, item)
-            
-            # Add totals row
-            self.update_column_totals()
             
             # Update window title
             self.setWindowTitle(f"Parquet File Viewer - {os.path.basename(file_name)}")
@@ -1016,6 +991,9 @@ class ParquetViewer(QMainWindow):
             # Enable sorting
             self.table.setSortingEnabled(True)
             
+            # Update totals
+            self.update_column_totals()
+            
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to load parquet file: {str(e)}")
             return False
@@ -1028,13 +1006,15 @@ class ParquetViewer(QMainWindow):
             
         self.updating_totals = True
         try:
-            last_row = self.table.rowCount() - 1
+            # Update totals widget
+            self.totals_widget.setColumnCount(self.table.columnCount())
+            self.totals_widget.setRowCount(1)
             
             # Create "Total" label for the first column
             total_label = QTableWidgetItem("Total")
             total_label.setBackground(QBrush(QColor("#f0f0f0")))
             total_label.setFlags(Qt.ItemIsEnabled)  # Make it read-only
-            self.table.setItem(last_row, 0, total_label)
+            self.totals_widget.setItem(0, 0, total_label)
             
             # Calculate totals for each column
             for col in range(self.table.columnCount()):
@@ -1042,7 +1022,7 @@ class ParquetViewer(QMainWindow):
                     continue
                     
                 numeric_values = []
-                for row in range(last_row):  # Exclude the totals row
+                for row in range(self.table.rowCount()):
                     item = self.table.item(row, col)
                     if item:
                         try:
@@ -1063,7 +1043,12 @@ class ParquetViewer(QMainWindow):
                 else:
                     total_item.setText("")
                     
-                self.table.setItem(last_row, col, total_item)
+                self.totals_widget.setItem(0, col, total_item)
+            
+            # Sync column widths with main table
+            for col in range(self.table.columnCount()):
+                self.totals_widget.setColumnWidth(col, self.table.columnWidth(col))
+                
         finally:
             self.updating_totals = False
 
@@ -1296,6 +1281,9 @@ class ParquetViewer(QMainWindow):
         # Update row heights if text wrapping is enabled
         if self.wrap_text:
             self.table.resizeRowsToContents()
+        # Sync totals widget column widths
+        for col in range(self.table.columnCount()):
+            self.totals_widget.setColumnWidth(col, self.table.columnWidth(col))
 
     def adjust_all_columns(self):
         """Adjust all column widths based on content and window size"""
@@ -1449,6 +1437,7 @@ class ParquetViewer(QMainWindow):
             self.save_action.setEnabled(self.modified)
             self.update_undo_redo_state()
             self.update_status_bar()
+            self.update_column_totals()  # Update totals after undo
 
     def redo_edit(self):
         """Handle redo action"""
@@ -1467,6 +1456,7 @@ class ParquetViewer(QMainWindow):
             self.save_action.setEnabled(True)
             self.update_undo_redo_state()
             self.update_status_bar()
+            self.update_column_totals()  # Update totals after redo
 
     def update_undo_redo_state(self):
         """Update the enabled state of undo/redo actions"""
@@ -1786,10 +1776,10 @@ class ParquetViewer(QMainWindow):
         if self.modified:
             msg_box = QMessageBox()
             msg_box.setWindowTitle("Save Changes?")
-            msg_box.setText("You have unsaved changes. What would you like to do?")
+            msg_box.setText("The document has been modified. Do you want to save your changes?")
             
             save_btn = msg_box.addButton("&Save", QMessageBox.AcceptRole)
-            discard_btn = msg_box.addButton("&Discard", QMessageBox.DestructiveRole)
+            no_btn = msg_box.addButton("&No", QMessageBox.RejectRole)
             cancel_btn = msg_box.addButton("&Cancel", QMessageBox.RejectRole)
             msg_box.setDefaultButton(save_btn)
             msg_box.setEscapeButton(cancel_btn)
@@ -1799,7 +1789,7 @@ class ParquetViewer(QMainWindow):
             
             if clicked_button == save_btn:
                 return self.save_file()
-            elif clicked_button == discard_btn:
+            elif clicked_button == no_btn:
                 return True
             else:  # Cancel
                 return False
@@ -1834,6 +1824,61 @@ class ParquetViewer(QMainWindow):
             
             # Update column totals
             self.update_column_totals()
+
+    def show_row_menu(self, pos):
+        """Show context menu for row operations"""
+        if not self.edit_mode:
+            return
+            
+        v_header = self.table.verticalHeader()
+        row = v_header.logicalIndexAt(pos)
+        
+        menu = QMenu()
+        
+        # Add row options
+        insert_above_action = menu.addAction("Insert Row Above")
+        insert_below_action = menu.addAction("Insert Row Below")
+        menu.addSeparator()
+        delete_row_action = menu.addAction("Delete Row")
+        
+        # Calculate menu position
+        pos = v_header.mapToGlobal(pos)
+        
+        action = menu.exec_(pos)
+        
+        if action == insert_above_action:
+            self.insert_row(row)
+        elif action == insert_below_action:
+            self.insert_row(row + 1)
+        elif action == delete_row_action:
+            self.delete_row(row)
+
+    def insert_row(self, row_index):
+        """Insert a new row at the specified index"""
+        if not self.edit_mode:
+            return
+            
+        # Insert into DataFrame
+        self.original_df.loc[row_index + 0.5] = pd.Series([None] * len(self.original_df.columns), index=self.original_df.columns)
+        self.original_df = self.original_df.sort_index().reset_index(drop=True)
+        
+        # Insert into table
+        self.table.insertRow(row_index)
+        
+        # Add empty cells
+        for col in range(self.table.columnCount()):
+            item = QTableWidgetItem()
+            if self.edit_mode:
+                item.setFlags(item.flags() | Qt.ItemIsEditable)
+            self.table.setItem(row_index, col, item)
+        
+        # Update modified state
+        self.modified = True
+        self.save_action.setEnabled(True)
+        self.update_status_bar()
+        
+        # Update column totals
+        self.update_column_totals()
 
     def delete_row(self, row):
         """Delete a row from the table and DataFrame"""
