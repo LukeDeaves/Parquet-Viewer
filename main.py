@@ -1,4 +1,5 @@
 import sys
+import os
 import pandas as pd
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                             QPushButton, QFileDialog, QTableWidget, QTableWidgetItem)
@@ -36,6 +37,11 @@ class ParquetViewer(QMainWindow):
             try:
                 # Read the parquet file
                 df = pd.read_parquet(file_name)
+                
+                # Update window title with file name
+                base_name = os.path.basename(file_name)
+                name_without_ext = os.path.splitext(base_name)[0]
+                self.setWindowTitle(f"{name_without_ext} - Parquet File Viewer")
                 
                 # Set up the table
                 self.table.setRowCount(len(df))
