@@ -1250,81 +1250,58 @@ class ParquetViewer(QMainWindow):
                 QFrame[frameShape="4"] {
                     color: #444444;
                 }
+                /* Unified Scrollbar Style - Refined */
                 QScrollBar:horizontal {
                     border: none;
-                    background: #2b2b2b;
-                    height: 14px;
-                    margin: 0px 21px 0 21px;
+                    background: #3a3a3a; /* Dark track background */
+                    height: 14px; /* Total height including padding */
+                    margin: 0px 0px 0 0px; /* No margin on the scrollbar itself */
                 }
                 QScrollBar::handle:horizontal {
-                    background: #3b3b3b;
-                    min-width: 25px;
-                    border-radius: 7px;
+                    background: #606060; /* Handle color */
+                    min-width: 20px;
+                    border-radius: 3px; /* Slightly less rounded */
+                    height: 6px; /* Actual handle height */
+                    margin: 4px 18px; /* Top/bottom margin for padding, left/right for button space */
                 }
                 QScrollBar::handle:horizontal:hover {
-                    background: #4b4b4b;
+                    background: #707070;
                 }
-                QScrollBar::add-line:horizontal {
-                    border: none;
-                    background: #3b3b3b;
-                    width: 20px;
-                    border-top-right-radius: 7px;
-                    border-bottom-right-radius: 7px;
-                    subcontrol-position: right;
-                    subcontrol-origin: margin;
-                }
+                QScrollBar::add-line:horizontal,
                 QScrollBar::sub-line:horizontal {
+                    /* Explicitly hide arrows */
                     border: none;
-                    background: #3b3b3b;
-                    width: 20px;
-                    border-top-left-radius: 7px;
-                    border-bottom-left-radius: 7px;
-                    subcontrol-position: left;
-                    subcontrol-origin: margin;
-                }
-                QScrollBar::add-line:horizontal:hover,
-                QScrollBar::sub-line:horizontal:hover {
-                    background: #4b4b4b;
+                    background: none;
+                    width: 0px;
+                    height: 0px;
                 }
                 QScrollBar::add-page:horizontal,
                 QScrollBar::sub-page:horizontal {
-                    background: none;
+                    background: none; /* Track area */
                 }
                 QScrollBar:vertical {
                     border: none;
-                    background: #2b2b2b;
-                    width: 14px;
-                    margin: 21px 0 21px 0;
+                    background: #3a3a3a;
+                    width: 14px; /* Total width including padding */
+                    margin: 0 0px 0 0px;
                 }
                 QScrollBar::handle:vertical {
-                    background: #3b3b3b;
-                    min-height: 25px;
-                    border-radius: 7px;
+                    background: #606060;
+                    min-height: 20px;
+                    border-radius: 3px;
+                    width: 6px; /* Actual handle width */
+                    margin: 0px 4px; /* Adjusted margin: No top/bottom needed, just left/right for padding */
                 }
                 QScrollBar::handle:vertical:hover {
-                    background: #4b4b4b;
+                    background: #707070;
                 }
-                QScrollBar::add-line:vertical {
-                    border: none;
-                    background: #3b3b3b;
-                    height: 20px;
-                    border-bottom-left-radius: 7px;
-                    border-bottom-right-radius: 7px;
-                    subcontrol-position: bottom;
-                    subcontrol-origin: margin;
-                }
+                QScrollBar::add-line:vertical,
                 QScrollBar::sub-line:vertical {
+                    /* Explicitly hide arrows */
                     border: none;
-                    background: #3b3b3b;
-                    height: 20px;
-                    border-top-left-radius: 7px;
-                    border-top-right-radius: 7px;
-                    subcontrol-position: top;
-                    subcontrol-origin: margin;
-                }
-                QScrollBar::add-line:vertical:hover,
-                QScrollBar::sub-line:vertical:hover {
-                    background: #4b4b4b;
+                    background: none;
+                    width: 0px;
+                    height: 0px;
                 }
                 QScrollBar::add-page:vertical,
                 QScrollBar::sub-page:vertical {
@@ -1348,43 +1325,32 @@ class ParquetViewer(QMainWindow):
             dark_palette.setColor(QPalette.HighlightedText, Qt.black)
             self.setPalette(dark_palette)
         else:
-            # Apply custom light theme scrollbar style
+            # Apply the *same* refined scrollbar style structure for light mode
             self.setStyleSheet("""
+                /* Unified Scrollbar Style - Refined, No Arrows */
                 QScrollBar:horizontal {
                     border: none;
-                    background: #f0f0f0; /* Light background */
-                    height: 14px;
-                    margin: 0px 21px 0 21px;
+                    background: #e0e0e0; /* Light track */
+                    height: 14px; /* Total height */
+                    margin: 0px 0px 0 0px;
                 }
                 QScrollBar::handle:horizontal {
                     background: #a0a0a0; /* Medium gray handle */
-                    min-width: 25px;
-                    border-radius: 7px;
+                    min-width: 20px;
+                    border-radius: 3px;
+                    height: 6px; /* Actual handle height */
+                    margin: 4px 0px; /* Adjusted margin: No left/right needed, just top/bottom for padding */
                 }
                 QScrollBar::handle:horizontal:hover {
-                    background: #808080; /* Darker gray on hover */
+                    background: #888888;
                 }
-                QScrollBar::add-line:horizontal {
-                    border: none;
-                    background: #c0c0c0; /* Lighter gray buttons */
-                    width: 20px;
-                    border-top-right-radius: 7px;
-                    border-bottom-right-radius: 7px;
-                    subcontrol-position: right;
-                    subcontrol-origin: margin;
-                }
+                QScrollBar::add-line:horizontal,
                 QScrollBar::sub-line:horizontal {
+                    /* Explicitly hide arrows */
                     border: none;
-                    background: #c0c0c0;
-                    width: 20px;
-                    border-top-left-radius: 7px;
-                    border-bottom-left-radius: 7px;
-                    subcontrol-position: left;
-                    subcontrol-origin: margin;
-                }
-                QScrollBar::add-line:horizontal:hover,
-                QScrollBar::sub-line:horizontal:hover {
-                    background: #a0a0a0; /* Medium gray on hover */
+                    background: none;
+                    width: 0px;
+                    height: 0px;
                 }
                 QScrollBar::add-page:horizontal,
                 QScrollBar::sub-page:horizontal {
@@ -1392,39 +1358,27 @@ class ParquetViewer(QMainWindow):
                 }
                 QScrollBar:vertical {
                     border: none;
-                    background: #f0f0f0; /* Light background */
-                    width: 14px;
-                    margin: 21px 0 21px 0;
+                    background: #e0e0e0; /* Light track */
+                    width: 14px; /* Total width */
+                    margin: 0 0px 0 0px;
                 }
                 QScrollBar::handle:vertical {
-                    background: #a0a0a0; /* Medium gray handle */
-                    min-height: 25px;
-                    border-radius: 7px;
+                    background: #a0a0a0;
+                    min-height: 20px;
+                    border-radius: 3px;
+                    width: 6px; /* Actual handle width */
+                    margin: 0px 4px; /* Adjusted margin: No top/bottom needed, just left/right for padding */
                 }
                 QScrollBar::handle:vertical:hover {
-                    background: #808080; /* Darker gray on hover */
+                    background: #888888;
                 }
-                QScrollBar::add-line:vertical {
-                    border: none;
-                    background: #c0c0c0; /* Lighter gray buttons */
-                    height: 20px;
-                    border-bottom-left-radius: 7px;
-                    border-bottom-right-radius: 7px;
-                    subcontrol-position: bottom;
-                    subcontrol-origin: margin;
-                }
+                QScrollBar::add-line:vertical,
                 QScrollBar::sub-line:vertical {
+                     /* Explicitly hide arrows */
                     border: none;
-                    background: #c0c0c0;
-                    height: 20px;
-                    border-top-left-radius: 7px;
-                    border-top-right-radius: 7px;
-                    subcontrol-position: top;
-                    subcontrol-origin: margin;
-                }
-                QScrollBar::add-line:vertical:hover,
-                QScrollBar::sub-line:vertical:hover {
-                    background: #a0a0a0; /* Medium gray on hover */
+                    background: none;
+                    width: 0px;
+                    height: 0px;
                 }
                 QScrollBar::add-page:vertical,
                 QScrollBar::sub-page:vertical {
