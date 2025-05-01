@@ -35,6 +35,7 @@ class ParquetViewer(QMainWindow):
         self.table.setSortingEnabled(True)  # Enable sorting
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)  # Enable context menu
         self.table.customContextMenuRequested.connect(self.show_context_menu)  # Connect context menu signal
+        self.table.setSelectionMode(QTableWidget.ExtendedSelection)  # Enable multiple cell selection
         layout.addWidget(self.table)
         
         # Apply initial theme
@@ -163,18 +164,45 @@ class ParquetViewer(QMainWindow):
             self.setStyleSheet("")  # Reset to default light theme
             self.setPalette(self.style().standardPalette())  # Reset to default palette
         
+    def keyPressEvent(self, event):
+        """Handle key press events"""
+        if event.key() == Qt.Key_Escape:
+            self.table.clearSelection()
+        super().keyPressEvent(event)
+
     def show_context_menu(self, position):
         """Show context menu for copying cell contents"""
         menu = QMenu()
         copy_action = menu.addAction("Copy")
         
-        # Get the item at the clicked position
-        item = self.table.itemAt(position)
-        if item:
+        # Get selected items
+        selected_items = self.table.selectedItems()
+        if selected_items:
             action = menu.exec_(self.table.viewport().mapToGlobal(position))
             if action == copy_action:
-                # Copy the cell text to clipboard
-                QApplication.clipboard().setText(item.text())
+                # Get unique rows and columns to maintain selection order
+                rows = sorted(set(item.row() for item in selected_items))
+                cols = sorted(set(item.column() for item in selected_items))
+                
+                # Create a list of lists to store the data
+                data = []
+                current_row = []
+                last_row = -1
+                
+                for item in selected_items:
+                    if item.row() != last_row:
+                        if current_row:
+                            data.append(current_row)
+                        current_row = []
+                        last_row = item.row()
+                    current_row.append(item.text())
+                
+                if current_row:
+                    data.append(current_row)
+                
+                # Convert to tab-separated string
+                text_to_copy = '\n'.join('\t'.join(row) for row in data)
+                QApplication.clipboard().setText(text_to_copy)
 
     def open_file(self):
         file_name, _ = QFileDialog.getOpenFileName(
