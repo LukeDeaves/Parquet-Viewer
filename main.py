@@ -30,11 +30,6 @@ class ParquetViewer(QMainWindow):
         self.setCentralWidget(central_widget)
         layout = QVBoxLayout(central_widget)
         
-        # Create button to open file
-        self.open_button = QPushButton("Open Parquet File")
-        self.open_button.clicked.connect(self.open_file)
-        layout.addWidget(self.open_button)
-        
         # Create table widget to display data
         self.table = QTableWidget()
         layout.addWidget(self.table)
@@ -48,6 +43,7 @@ class ParquetViewer(QMainWindow):
         # File menu
         file_menu = menubar.addMenu("File")
         open_action = QAction("Open Parquet File", self)
+        open_action.setShortcut("Ctrl+O")  # Add keyboard shortcut
         open_action.triggered.connect(self.open_file)
         file_menu.addAction(open_action)
         
