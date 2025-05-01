@@ -13,9 +13,69 @@ from pathlib import Path
 import numpy as np
 from datetime import datetime
 import shutil
+from typing import List, Any, Tuple
 
 # Suppress PyQt5 deprecation warning
 warnings.filterwarnings("ignore", category=DeprecationWarning)
+
+# Command pattern for undo/redo
+class EditCommand:
+    def __init__(self, row: int, col: int, old_value: Any, new_value: Any):
+        self.row = row
+        self.col = col
+        self.old_value = old_value
+        self.new_value = new_value
+
+    def undo(self, table: QTableWidget, df: pd.DataFrame):
+        # Update DataFrame
+        df.iloc[self.row, self.col] = self.old_value
+        # Update table
+        item = table.item(self.row, self.col)
+        if item:
+            item.setText(str(self.old_value) if pd.notna(self.old_value) else '')
+
+    def redo(self, table: QTableWidget, df: pd.DataFrame):
+        # Update DataFrame
+        df.iloc[self.row, self.col] = self.new_value
+        # Update table
+        item = table.item(self.row, self.col)
+        if item:
+            item.setText(str(self.new_value) if pd.notna(self.new_value) else '')
+
+class CommandStack:
+    def __init__(self):
+        self.undo_stack: List[EditCommand] = []
+        self.redo_stack: List[EditCommand] = []
+
+    def push(self, command: EditCommand):
+        self.undo_stack.append(command)
+        self.redo_stack.clear()  # Clear redo stack when new command is pushed
+
+    def can_undo(self) -> bool:
+        return len(self.undo_stack) > 0
+
+    def can_redo(self) -> bool:
+        return len(self.redo_stack) > 0
+
+    def undo(self, table: QTableWidget, df: pd.DataFrame) -> bool:
+        if not self.can_undo():
+            return False
+        command = self.undo_stack.pop()
+        command.undo(table, df)
+        self.redo_stack.append(command)
+        return True
+
+    def redo(self, table: QTableWidget, df: pd.DataFrame) -> bool:
+        if not self.can_redo():
+            return False
+        command = self.redo_stack.pop()
+        command.redo(table, df)
+        self.undo_stack.append(command)
+        return True
+
+    def clear(self):
+        self.undo_stack.clear()
+        self.redo_stack.clear()
 
 class ParquetViewer(QMainWindow):
     def __init__(self):
@@ -38,6 +98,12 @@ class ParquetViewer(QMainWindow):
         self.modified = False
         self.edit_mode = False
         self.modified_cells = set()  # Track modified cells (row, col)
+        
+        # Initialize command stack for undo/redo
+        self.command_stack = CommandStack()
+        
+        # Initialize actions before creating menu
+        self.init_actions()
         
         # Create menu bar
         self.create_menu_bar()
@@ -88,6 +154,46 @@ class ParquetViewer(QMainWindow):
         # Apply initial theme
         self.apply_theme()
         
+        # Add clipboard data storage
+        self.clipboard_data = None
+        self.clipboard_cells = set()  # Store coordinates of copied cells
+        
+        # Add timer for selection animation
+        self.selection_timer = QTimer(self)
+        self.selection_timer.timeout.connect(self.toggle_selection_highlight)
+        self.selection_visible = True
+        
+    def init_actions(self):
+        """Initialize all actions"""
+        # Undo/Redo actions
+        self.undo_action = QAction("Undo", self)
+        self.undo_action.setShortcut("Ctrl+Z")
+        self.undo_action.triggered.connect(self.undo_edit)
+        self.undo_action.setEnabled(False)
+        
+        self.redo_action = QAction("Redo", self)
+        self.redo_action.setShortcut("Ctrl+Y")
+        self.redo_action.triggered.connect(self.redo_edit)
+        self.redo_action.setEnabled(False)
+        
+        # Cut/Copy/Paste actions
+        self.cut_action = QAction("Cut", self)
+        self.cut_action.setShortcut("Ctrl+X")
+        self.cut_action.triggered.connect(self.cut_cells)
+        
+        self.copy_action = QAction("Copy", self)
+        self.copy_action.setShortcut("Ctrl+C")
+        self.copy_action.triggered.connect(self.copy_cells)
+        
+        self.paste_action = QAction("Paste", self)
+        self.paste_action.setShortcut("Ctrl+V")
+        self.paste_action.triggered.connect(self.paste_cells)
+        
+        # Recent files shortcut
+        self.recent_files_action = QAction("Recent Files", self)
+        self.recent_files_action.setShortcut("Ctrl+Shift+O")
+        self.recent_files_action.triggered.connect(self.show_recent_menu)
+
     def create_menu_bar(self):
         menubar = self.menuBar()
         
@@ -115,12 +221,17 @@ class ParquetViewer(QMainWindow):
         
         # Add recent files menu
         self.recent_menu = self.file_menu.addMenu("Recent Files")
+        # Add the recent files shortcut to the application
+        self.addAction(self.recent_files_action)
         
-        # Add global shortcut for Recent Files
-        recent_shortcut = QAction("Recent Files", self)
-        recent_shortcut.setShortcut("Ctrl+Shift+O")
-        recent_shortcut.triggered.connect(self.show_recent_menu)
-        self.addAction(recent_shortcut)
+        # Edit menu
+        edit_menu = menubar.addMenu("Edit")
+        edit_menu.addAction(self.undo_action)
+        edit_menu.addAction(self.redo_action)
+        edit_menu.addSeparator()
+        edit_menu.addAction(self.cut_action)
+        edit_menu.addAction(self.copy_action)
+        edit_menu.addAction(self.paste_action)
         
         # Settings menu
         settings_menu = menubar.addMenu("Settings")
@@ -150,7 +261,7 @@ class ParquetViewer(QMainWindow):
         reset_view_action = QAction("Reset View", self)
         reset_view_action.triggered.connect(self.reset_view)
         settings_menu.addAction(reset_view_action)
-    
+        
     def load_settings(self):
         """Load settings from config file"""
         if os.path.exists(self.config_file):
@@ -228,11 +339,9 @@ class ParquetViewer(QMainWindow):
                 # Keep edit mode on
                 self.edit_mode_action.setChecked(True)
                 return
-            # If Discard, continue with toggling edit mode off
+            # If Discard, revert all changes
             else:
-                # Reset modified state when discarding changes
-                self.modified = False
-                self.modified_cells.clear()
+                self.revert_all_changes()
         
         self.edit_mode = self.edit_mode_action.isChecked()
         self.save_settings()
@@ -247,14 +356,16 @@ class ParquetViewer(QMainWindow):
                     else:
                         item.setFlags(item.flags() & ~Qt.ItemIsEditable)
         
-        # Reset modified state when entering edit mode (treat like opening a new file)
+        # Reset modified state when entering edit mode
         if self.edit_mode:
             self.modified = False
             self.modified_cells.clear()
+            self.command_stack.clear()
         
-        # Update UI elements - don't enable save until actual changes are made
-        self.save_action.setEnabled(self.edit_mode and self.modified)
+        # Update UI elements
+        self.save_action.setEnabled(False)
         self.save_as_action.setEnabled(self.edit_mode)
+        self.update_undo_redo_state()
         self.update_status_bar()
 
     def on_cell_changed(self, item):
@@ -271,6 +382,9 @@ class ParquetViewer(QMainWindow):
             col_name = self.table.horizontalHeaderItem(col).text()
             dtype = self.column_types.get(col_name)
             
+            # Store the old value before making changes
+            old_value = self.original_df.iloc[row, col]
+            
             if dtype:
                 # Validate and convert the new value
                 if pd.isna(new_value) or new_value == '':
@@ -286,6 +400,10 @@ class ParquetViewer(QMainWindow):
                 else:
                     converted_value = str(new_value)
                 
+                # Create and push the edit command
+                command = EditCommand(row, col, old_value, converted_value)
+                self.command_stack.push(command)
+                
                 # Update the DataFrame
                 self.original_df.iloc[row, col] = converted_value
                 
@@ -300,15 +418,22 @@ class ParquetViewer(QMainWindow):
                 else:
                     item.setText('')
                 
-                # Update status
+                # Update UI state
+                self.update_undo_redo_state()
                 self.update_status_bar()
                 
             else:
                 # If no dtype found, treat as string
+                command = EditCommand(row, col, old_value, new_value)
+                self.command_stack.push(command)
+                
                 self.original_df.iloc[row, col] = new_value
                 self.modified = True
                 self.modified_cells.add((row, col))
                 self.save_action.setEnabled(True)
+                
+                # Update UI state
+                self.update_undo_redo_state()
                 self.update_status_bar()
                 
         except (ValueError, TypeError) as e:
@@ -733,6 +858,10 @@ class ParquetViewer(QMainWindow):
             # Add to recent files
             self.add_to_recent_files(file_name)
             
+            # Clear command stack when loading new file
+            self.command_stack.clear()
+            self.update_undo_redo_state()
+            
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Error reading file: {e}")
 
@@ -1086,6 +1215,194 @@ class ParquetViewer(QMainWindow):
                     # Use a timer to ensure menu is fully shown before highlighting
                     QTimer.singleShot(50, lambda: self.recent_menu.setActiveAction(first_action))
                 break
+
+    def undo_edit(self):
+        """Handle undo action"""
+        if self.command_stack.undo(self.table, self.original_df):
+            self.update_undo_redo_state()
+            # Update modified state
+            self.modified = len(self.command_stack.undo_stack) > 0
+            self.save_action.setEnabled(self.modified)
+            self.update_status_bar()
+
+    def redo_edit(self):
+        """Handle redo action"""
+        if self.command_stack.redo(self.table, self.original_df):
+            self.update_undo_redo_state()
+            # Update modified state
+            self.modified = True
+            self.save_action.setEnabled(True)
+            self.update_status_bar()
+
+    def update_undo_redo_state(self):
+        """Update the enabled state of undo/redo actions"""
+        self.undo_action.setEnabled(self.command_stack.can_undo())
+        self.redo_action.setEnabled(self.command_stack.can_redo())
+
+    def revert_all_changes(self):
+        """Revert all changes to the original state"""
+        if not self.original_df is None:
+            # Revert all modified cells
+            for row, col in self.modified_cells:
+                value = self.original_df.iloc[row, col]
+                item = self.table.item(row, col)
+                if item:
+                    item.setText(str(value) if pd.notna(value) else '')
+            
+            # Clear tracking states
+            self.modified = False
+            self.modified_cells.clear()
+            self.command_stack.clear()
+            
+            # Update UI
+            self.save_action.setEnabled(False)
+            self.update_undo_redo_state()
+            self.update_status_bar()
+
+    def toggle_selection_highlight(self):
+        """Toggle the highlight of copied cells"""
+        if not self.clipboard_cells:
+            self.selection_timer.stop()
+            return
+            
+        self.selection_visible = not self.selection_visible
+        for row, col in self.clipboard_cells:
+            item = self.table.item(row, col)
+            if item:
+                if self.selection_visible:
+                    item.setBackground(QColor(230, 230, 230))  # Light gray
+                else:
+                    item.setBackground(QColor(255, 255, 255))  # White
+
+    def cut_cells(self):
+        """Cut selected cells"""
+        self.copy_cells(cut=True)
+        if self.edit_mode:
+            # Clear the contents of cut cells
+            selected_items = self.table.selectedItems()
+            for item in selected_items:
+                row = item.row()
+                col = item.column()
+                old_value = self.original_df.iloc[row, col]
+                
+                # Create and push the edit command
+                command = EditCommand(row, col, old_value, None)
+                self.command_stack.push(command)
+                
+                # Update DataFrame and UI
+                self.original_df.iloc[row, col] = None
+                item.setText('')
+                
+                # Mark as modified
+                self.modified = True
+                self.modified_cells.add((row, col))
+            
+            # Update UI state
+            self.save_action.setEnabled(True)
+            self.update_undo_redo_state()
+            self.update_status_bar()
+
+    def copy_cells(self, cut=False):
+        """Copy selected cells"""
+        selected_items = self.table.selectedItems()
+        if not selected_items:
+            return
+            
+        # Get unique rows and columns to maintain selection order
+        rows = sorted(set(item.row() for item in selected_items))
+        cols = sorted(set(item.column() for item in selected_items))
+        
+        # Create a list of lists to store the data
+        data = []
+        current_row = []
+        last_row = -1
+        
+        # Store the cell coordinates and data
+        self.clipboard_cells = set()
+        for item in selected_items:
+            if item.row() != last_row:
+                if current_row:
+                    data.append(current_row)
+                current_row = []
+                last_row = item.row()
+            current_row.append(item.text())
+            self.clipboard_cells.add((item.row(), item.column()))
+        
+        if current_row:
+            data.append(current_row)
+        
+        # Store both text and structured data
+        text_to_copy = '\n'.join('\t'.join(row) for row in data)
+        self.clipboard_data = {
+            'text': text_to_copy,
+            'data': data,
+            'cells': self.clipboard_cells
+        }
+        
+        # Set system clipboard
+        QApplication.clipboard().setText(text_to_copy)
+        
+        # Start selection animation if not cutting
+        if not cut:
+            self.selection_timer.start(500)  # Blink every 500ms
+        else:
+            self.selection_timer.stop()
+            self.clipboard_cells.clear()
+
+    def paste_cells(self):
+        """Paste cells from clipboard"""
+        if not self.edit_mode:
+            return
+            
+        # Get current cell
+        current_item = self.table.currentItem()
+        if not current_item:
+            return
+            
+        start_row = current_item.row()
+        start_col = current_item.column()
+        
+        # Try to get structured data from our clipboard
+        if self.clipboard_data and 'data' in self.clipboard_data:
+            data = self.clipboard_data['data']
+        else:
+            # Fall back to system clipboard
+            clipboard_text = QApplication.clipboard().text()
+            if not clipboard_text:
+                return
+            # Parse clipboard text (tab-separated values)
+            data = [row.split('\t') for row in clipboard_text.split('\n')]
+        
+        # Paste data
+        for i, row_data in enumerate(data):
+            for j, value in enumerate(row_data):
+                row = start_row + i
+                col = start_col + j
+                
+                # Check if we're still within table bounds
+                if row >= self.table.rowCount() or col >= self.table.columnCount():
+                    continue
+                
+                item = self.table.item(row, col)
+                if item:
+                    old_value = self.original_df.iloc[row, col]
+                    
+                    # Create and push the edit command
+                    command = EditCommand(row, col, old_value, value)
+                    self.command_stack.push(command)
+                    
+                    # Update DataFrame and UI
+                    self.original_df.iloc[row, col] = value
+                    item.setText(value)
+                    
+                    # Mark as modified
+                    self.modified = True
+                    self.modified_cells.add((row, col))
+        
+        # Update UI state
+        self.save_action.setEnabled(True)
+        self.update_undo_redo_state()
+        self.update_status_bar()
 
 def main():
     app = QApplication(sys.argv)
