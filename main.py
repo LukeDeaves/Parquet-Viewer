@@ -3,7 +3,7 @@ import os
 import pandas as pd
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                             QPushButton, QFileDialog, QTableWidget, QTableWidgetItem,
-                            QMenuBar, QMenu, QAction)
+                            QMenuBar, QMenu, QAction, QMessageBox, QFrame)
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QPalette, QColor
 
@@ -36,6 +36,12 @@ class ParquetViewer(QMainWindow):
         
     def create_menu_bar(self):
         menubar = self.menuBar()
+        
+        # File menu
+        file_menu = menubar.addMenu("File")
+        open_action = QAction("Open Parquet File", self)
+        open_action.triggered.connect(self.open_file)
+        file_menu.addAction(open_action)
         
         # Settings menu
         settings_menu = menubar.addMenu("Settings")
@@ -103,6 +109,9 @@ class ParquetViewer(QMainWindow):
                 QMenu::item:selected {
                     background-color: #3b3b3b;
                 }
+                QFrame[frameShape="4"] {
+                    color: #444444;
+                }
             """)
             # Set dark palette for better contrast
             dark_palette = QPalette()
@@ -158,7 +167,7 @@ class ParquetViewer(QMainWindow):
                 self.table.resizeColumnsToContents()
                 
             except Exception as e:
-                print(f"Error reading file: {e}")
+                QMessageBox.critical(self, "Error", f"Error reading file: {e}")
 
 def main():
     app = QApplication(sys.argv)
