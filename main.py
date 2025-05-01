@@ -5,7 +5,8 @@ import pandas as pd
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                             QPushButton, QFileDialog, QTableWidget, QTableWidgetItem,
                             QMenuBar, QMenu, QAction, QMessageBox, QFrame, QDialog, QLineEdit, QDialogButtonBox,
-                            QLabel, QStatusBar, QTableWidgetSelectionRange, QComboBox, QScrollBar)
+                            QLabel, QStatusBar, QTableWidgetSelectionRange, QComboBox, QScrollBar,
+                            QAbstractItemView)
 from PyQt5.QtCore import Qt, QPoint, QTimer
 from PyQt5.QtGui import QPalette, QColor, QCursor, QBrush
 import configparser
@@ -238,6 +239,7 @@ class ParquetViewer(QMainWindow):
         
         # Add flag to prevent recursive updates
         self.updating_totals = False
+        self.applying_delete = False  # Add flag for delete operation
         
         # Store column sort states
         self.column_sort_states = {}  # {column_index: is_ascending}
@@ -472,7 +474,7 @@ class ParquetViewer(QMainWindow):
 
     def on_cell_changed(self, item):
         """Handle cell content changes"""
-        if not self.edit_mode or self.updating_totals:
+        if not self.edit_mode or self.updating_totals or self.applying_delete:  # Check the new flag
             return
             
         row = item.row()
@@ -1444,11 +1446,10 @@ class ParquetViewer(QMainWindow):
                     self.table.editItem(current)
                     return True # Consume the event, F2 edit works differently
                 
-            elif key in (Qt.Key_Delete, Qt.Key_Backspace):
-                if not self.edit_mode:
-                    self.delete_selected_cell_contents()
-                    return True
-                
+            # We no longer need the specific Delete/Backspace handling here
+            # elif key in (Qt.Key_Delete, Qt.Key_Backspace):
+            #     ...
+
         elif source == self.table and event.type() == event.MouseButtonDblClick:
             if self.edit_mode and self.table.currentItem():
                 self.table.editItem(self.table.currentItem())
@@ -1483,12 +1484,16 @@ class ParquetViewer(QMainWindow):
             self.command_stack.push(command)
             
             # Apply all changes
-            for row, col, _, _ in changes:
-                self.original_df.iloc[row, col] = None
-                item = self.table.item(row, col)
-                if item:
-                    item.setText('')
-                self.modified_cells.add((row, col))
+            self.applying_delete = True  # Set flag before UI updates
+            try:
+                for row, col, _, _ in changes:
+                    self.original_df.iloc[row, col] = None
+                    item = self.table.item(row, col)
+                    if item:
+                        item.setText('')
+                    self.modified_cells.add((row, col))
+            finally:
+                self.applying_delete = False # Ensure flag is reset
             
             self.modified = True
             self.save_action.setEnabled(True)
