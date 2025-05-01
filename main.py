@@ -18,10 +18,12 @@ class ParquetViewer(QMainWindow):
         # Initialize config
         self.config = configparser.ConfigParser()
         self.config_file = os.path.join(os.path.expanduser('~'), 'Documents', 'parquet_viewer.ini')
-        self.load_settings()
         
         # Create menu bar
         self.create_menu_bar()
+        
+        # Load settings after menu creation
+        self.load_settings()
         
         # Create central widget and layout
         central_widget = QWidget()
@@ -66,6 +68,10 @@ class ParquetViewer(QMainWindow):
         else:
             self.dark_mode = False
             self.save_settings()
+        
+        # Sync the menu toggle state with the loaded setting
+        if hasattr(self, 'dark_mode_action'):
+            self.dark_mode_action.setChecked(self.dark_mode)
 
     def save_settings(self):
         """Save current settings to config file"""
