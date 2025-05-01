@@ -1348,8 +1348,91 @@ class ParquetViewer(QMainWindow):
             dark_palette.setColor(QPalette.HighlightedText, Qt.black)
             self.setPalette(dark_palette)
         else:
-            self.setStyleSheet("")  # Reset to default light theme
-            self.setPalette(self.style().standardPalette())  # Reset to default palette
+            # Apply custom light theme scrollbar style
+            self.setStyleSheet("""
+                QScrollBar:horizontal {
+                    border: none;
+                    background: #f0f0f0; /* Light background */
+                    height: 14px;
+                    margin: 0px 21px 0 21px;
+                }
+                QScrollBar::handle:horizontal {
+                    background: #a0a0a0; /* Medium gray handle */
+                    min-width: 25px;
+                    border-radius: 7px;
+                }
+                QScrollBar::handle:horizontal:hover {
+                    background: #808080; /* Darker gray on hover */
+                }
+                QScrollBar::add-line:horizontal {
+                    border: none;
+                    background: #c0c0c0; /* Lighter gray buttons */
+                    width: 20px;
+                    border-top-right-radius: 7px;
+                    border-bottom-right-radius: 7px;
+                    subcontrol-position: right;
+                    subcontrol-origin: margin;
+                }
+                QScrollBar::sub-line:horizontal {
+                    border: none;
+                    background: #c0c0c0;
+                    width: 20px;
+                    border-top-left-radius: 7px;
+                    border-bottom-left-radius: 7px;
+                    subcontrol-position: left;
+                    subcontrol-origin: margin;
+                }
+                QScrollBar::add-line:horizontal:hover,
+                QScrollBar::sub-line:horizontal:hover {
+                    background: #a0a0a0; /* Medium gray on hover */
+                }
+                QScrollBar::add-page:horizontal,
+                QScrollBar::sub-page:horizontal {
+                    background: none;
+                }
+                QScrollBar:vertical {
+                    border: none;
+                    background: #f0f0f0; /* Light background */
+                    width: 14px;
+                    margin: 21px 0 21px 0;
+                }
+                QScrollBar::handle:vertical {
+                    background: #a0a0a0; /* Medium gray handle */
+                    min-height: 25px;
+                    border-radius: 7px;
+                }
+                QScrollBar::handle:vertical:hover {
+                    background: #808080; /* Darker gray on hover */
+                }
+                QScrollBar::add-line:vertical {
+                    border: none;
+                    background: #c0c0c0; /* Lighter gray buttons */
+                    height: 20px;
+                    border-bottom-left-radius: 7px;
+                    border-bottom-right-radius: 7px;
+                    subcontrol-position: bottom;
+                    subcontrol-origin: margin;
+                }
+                QScrollBar::sub-line:vertical {
+                    border: none;
+                    background: #c0c0c0;
+                    height: 20px;
+                    border-top-left-radius: 7px;
+                    border-top-right-radius: 7px;
+                    subcontrol-position: top;
+                    subcontrol-origin: margin;
+                }
+                QScrollBar::add-line:vertical:hover,
+                QScrollBar::sub-line:vertical:hover {
+                    background: #a0a0a0; /* Medium gray on hover */
+                }
+                QScrollBar::add-page:vertical,
+                QScrollBar::sub-page:vertical {
+                    background: none;
+                }
+            """)
+            # Reset palette but keep custom scrollbar style
+            self.setPalette(self.style().standardPalette())  
         
     def eventFilter(self, source, event):
         """Handle keyboard shortcuts for the table"""
