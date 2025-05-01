@@ -6,7 +6,7 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                             QPushButton, QFileDialog, QTableWidget, QTableWidgetItem,
                             QMenuBar, QMenu, QAction, QMessageBox, QFrame, QDialog, QLineEdit, QDialogButtonBox,
                             QLabel, QStatusBar)
-from PyQt5.QtCore import Qt, QPoint
+from PyQt5.QtCore import Qt, QPoint, QTimer
 from PyQt5.QtGui import QPalette, QColor, QCursor
 import configparser
 from pathlib import Path
@@ -1034,8 +1034,37 @@ class ParquetViewer(QMainWindow):
         # Calculate the position for the File menu
         file_pos = menu_bar.mapToGlobal(file_button_rect.bottomLeft())
         
-        # Show the File menu using exec_ which handles menu closing properly
-        self.file_menu.exec_(file_pos)
+        # Show the File menu
+        self.file_menu.popup(file_pos)
+        
+        # Find and highlight the Recent Files menu item
+        for action in self.file_menu.actions():
+            if action.menu() == self.recent_menu:
+                # Use a timer to ensure menu is fully shown before highlighting
+                QTimer.singleShot(50, lambda: self.file_menu.setActiveAction(action))
+                break
+        
+        # Use a timer to delay showing the Recent Files submenu
+        QTimer.singleShot(100, self.show_recent_submenu)
+
+    def show_recent_submenu(self):
+        """Show the Recent Files submenu"""
+        # Find the Recent Files menu item
+        for action in self.file_menu.actions():
+            if action.menu() == self.recent_menu:
+                # Get the action's geometry in the menu
+                rect = self.file_menu.actionGeometry(action)
+                # Calculate where the submenu should appear
+                submenu_pos = self.file_menu.mapToGlobal(rect.topRight())
+                # Show the submenu
+                self.recent_menu.popup(submenu_pos)
+                
+                # Highlight the first item if there are recent files
+                if self.recent_files:
+                    first_action = self.recent_menu.actions()[0]
+                    # Use a timer to ensure menu is fully shown before highlighting
+                    QTimer.singleShot(50, lambda: self.recent_menu.setActiveAction(first_action))
+                break
 
 def main():
     app = QApplication(sys.argv)
