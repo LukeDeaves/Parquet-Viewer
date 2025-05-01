@@ -23,6 +23,9 @@ class ParquetViewer(QMainWindow):
         self.config = configparser.ConfigParser()
         self.config_file = os.path.join(os.path.expanduser('~'), 'Documents', 'parquet_viewer.ini')
         
+        # Initialize recent files list
+        self.recent_files = []
+        
         # Create menu bar
         self.create_menu_bar()
         
@@ -65,6 +68,9 @@ class ParquetViewer(QMainWindow):
         open_action.triggered.connect(self.open_file)
         file_menu.addAction(open_action)
         
+        # Add recent files menu
+        self.recent_menu = file_menu.addMenu("Recent Files")
+        
         # Settings menu
         settings_menu = menubar.addMenu("Settings")
         
@@ -85,10 +91,17 @@ class ParquetViewer(QMainWindow):
             self.config.read(self.config_file)
             self.dark_mode = self.config.getboolean('Settings', 'dark_mode', fallback=False)
             self.last_folder = self.config.get('Settings', 'last_folder', fallback=os.path.join(os.path.expanduser('~'), 'Documents'))
+            # Load recent files
+            self.recent_files = self.config.get('Settings', 'recent_files', fallback='').split('|')
+            self.recent_files = [f for f in self.recent_files if f and os.path.exists(f)]  # Filter empty and non-existent files
         else:
             self.dark_mode = False
             self.last_folder = os.path.join(os.path.expanduser('~'), 'Documents')
+            self.recent_files = []
             self.save_settings()
+        
+        # Update recent files menu
+        self.update_recent_files_menu()
         
         # Sync the menu toggle state with the loaded setting
         if hasattr(self, 'dark_mode_action'):
@@ -100,6 +113,8 @@ class ParquetViewer(QMainWindow):
             self.config.add_section('Settings')
         self.config.set('Settings', 'dark_mode', str(self.dark_mode))
         self.config.set('Settings', 'last_folder', self.last_folder)
+        # Save recent files
+        self.config.set('Settings', 'recent_files', '|'.join(self.recent_files))
         
         with open(self.config_file, 'w') as f:
             self.config.write(f)
@@ -244,6 +259,80 @@ class ParquetViewer(QMainWindow):
                     break
             self.table.setRowHidden(row, not show_row)
 
+    def update_recent_files_menu(self):
+        """Update the recent files menu with current list of files"""
+        self.recent_menu.clear()
+        
+        if not self.recent_files:
+            no_recent = QAction("No Recent Files", self)
+            no_recent.setEnabled(False)
+            self.recent_menu.addAction(no_recent)
+            return
+            
+        for file_path in self.recent_files:
+            action = QAction(os.path.basename(file_path), self)
+            action.setStatusTip(file_path)
+            action.triggered.connect(lambda checked, path=file_path: self.open_recent_file(path))
+            self.recent_menu.addAction(action)
+
+    def add_to_recent_files(self, file_path):
+        """Add a file to recent files list"""
+        if file_path in self.recent_files:
+            self.recent_files.remove(file_path)
+        self.recent_files.insert(0, file_path)
+        self.recent_files = self.recent_files[:5]  # Keep only 5 most recent
+        self.save_settings()
+        self.update_recent_files_menu()
+
+    def open_recent_file(self, file_path):
+        """Open a file from the recent files menu"""
+        if os.path.exists(file_path):
+            self.load_parquet_file(file_path)
+        else:
+            QMessageBox.warning(self, "File Not Found", 
+                              f"The file {file_path} no longer exists.")
+            self.recent_files.remove(file_path)
+            self.save_settings()
+            self.update_recent_files_menu()
+
+    def load_parquet_file(self, file_name):
+        """Load and display a parquet file"""
+        try:
+            # Read the parquet file
+            df = pd.read_parquet(file_name)
+            
+            # Update window title with file name
+            base_name = os.path.basename(file_name)
+            name_without_ext = os.path.splitext(base_name)[0]
+            self.setWindowTitle(f"{name_without_ext} - Parquet File Viewer")
+            
+            # Clear existing filters
+            self.filters.clear()
+            
+            # Set up the table
+            self.table.setRowCount(len(df))
+            self.table.setColumnCount(len(df.columns))
+            self.table.setHorizontalHeaderLabels(df.columns)
+            
+            # Populate the table
+            for i in range(len(df)):
+                for j in range(len(df.columns)):
+                    item = QTableWidgetItem(str(df.iloc[i, j]))
+                    item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+                    self.table.setItem(i, j, item)
+            
+            # Resize columns to fit content
+            self.table.resizeColumnsToContents()
+            
+            # Enable sorting after data is loaded
+            self.table.setSortingEnabled(True)
+            
+            # Add to recent files
+            self.add_to_recent_files(file_name)
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Error reading file: {e}")
+
     def open_file(self):
         # Check if last folder exists, if not use Documents
         if not os.path.exists(self.last_folder):
@@ -261,38 +350,7 @@ class ParquetViewer(QMainWindow):
             self.last_folder = os.path.dirname(file_name)
             self.save_settings()  # Save the new last folder
             
-            try:
-                # Read the parquet file
-                df = pd.read_parquet(file_name)
-                
-                # Update window title with file name
-                base_name = os.path.basename(file_name)
-                name_without_ext = os.path.splitext(base_name)[0]
-                self.setWindowTitle(f"{name_without_ext} - Parquet File Viewer")
-                
-                # Clear existing filters
-                self.filters.clear()
-                
-                # Set up the table
-                self.table.setRowCount(len(df))
-                self.table.setColumnCount(len(df.columns))
-                self.table.setHorizontalHeaderLabels(df.columns)
-                
-                # Populate the table
-                for i in range(len(df)):
-                    for j in range(len(df.columns)):
-                        item = QTableWidgetItem(str(df.iloc[i, j]))
-                        item.setFlags(item.flags() & ~Qt.ItemIsEditable)
-                        self.table.setItem(i, j, item)
-                
-                # Resize columns to fit content
-                self.table.resizeColumnsToContents()
-                
-                # Enable sorting after data is loaded
-                self.table.setSortingEnabled(True)
-                
-            except Exception as e:
-                QMessageBox.critical(self, "Error", f"Error reading file: {e}")
+            self.load_parquet_file(file_name)
 
     def apply_theme(self):
         if self.dark_mode:
