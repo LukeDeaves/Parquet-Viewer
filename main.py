@@ -4,11 +4,15 @@ import warnings
 import pandas as pd
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                             QPushButton, QFileDialog, QTableWidget, QTableWidgetItem,
-                            QMenuBar, QMenu, QAction, QMessageBox, QFrame, QDialog, QLineEdit, QDialogButtonBox)
+                            QMenuBar, QMenu, QAction, QMessageBox, QFrame, QDialog, QLineEdit, QDialogButtonBox,
+                            QLabel, QStatusBar)
 from PyQt5.QtCore import Qt, QPoint
-from PyQt5.QtGui import QPalette, QColor
+from PyQt5.QtGui import QPalette, QColor, QCursor
 import configparser
 from pathlib import Path
+import numpy as np
+from datetime import datetime
+import shutil
 
 # Suppress PyQt5 deprecation warning
 warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -27,8 +31,25 @@ class ParquetViewer(QMainWindow):
         # Initialize recent files list
         self.recent_files = []
         
+        # Initialize editing state
+        self.current_file = None
+        self.original_df = None
+        self.column_types = {}
+        self.modified = False
+        self.edit_mode = False
+        self.modified_cells = set()  # Track modified cells (row, col)
+        
         # Create menu bar
         self.create_menu_bar()
+        
+        # Create status bar
+        self.status_bar = QStatusBar()
+        self.setStatusBar(self.status_bar)
+        self.edit_mode_label = QLabel()
+        self.modified_label = QLabel()
+        self.status_bar.addPermanentWidget(self.edit_mode_label)
+        self.status_bar.addPermanentWidget(self.modified_label)
+        self.update_status_bar()
         
         # Load settings after menu creation
         self.load_settings()
@@ -44,6 +65,7 @@ class ParquetViewer(QMainWindow):
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)  # Enable context menu
         self.table.customContextMenuRequested.connect(self.show_context_menu)  # Connect context menu signal
         self.table.setSelectionMode(QTableWidget.ExtendedSelection)  # Enable multiple cell selection
+        self.table.itemChanged.connect(self.on_cell_changed)  # Connect cell change signal
         
         # Configure header for right-click menu
         header = self.table.horizontalHeader()
@@ -54,6 +76,9 @@ class ParquetViewer(QMainWindow):
         
         # Handle window resize events
         self.table.horizontalHeader().setStretchLastSection(True)  # Prevent horizontal scrollbar by default
+        
+        # Install event filter for keyboard shortcuts
+        self.table.installEventFilter(self)
         
         layout.addWidget(self.table)
         
@@ -67,14 +92,35 @@ class ParquetViewer(QMainWindow):
         menubar = self.menuBar()
         
         # File menu
-        file_menu = menubar.addMenu("File")
+        self.file_menu = menubar.addMenu("File")
         open_action = QAction("Open Parquet File", self)
         open_action.setShortcut("Ctrl+O")
         open_action.triggered.connect(self.open_file)
-        file_menu.addAction(open_action)
+        self.file_menu.addAction(open_action)
+        
+        # Add Save actions
+        self.save_action = QAction("Save", self)
+        self.save_action.setShortcut("Ctrl+S")
+        self.save_action.triggered.connect(self.save_file)
+        self.save_action.setEnabled(False)
+        self.file_menu.addAction(self.save_action)
+        
+        self.save_as_action = QAction("Save As...", self)
+        self.save_as_action.setShortcut("Ctrl+Shift+S")
+        self.save_as_action.triggered.connect(self.save_file_as)
+        self.save_as_action.setEnabled(False)
+        self.file_menu.addAction(self.save_as_action)
+        
+        self.file_menu.addSeparator()
         
         # Add recent files menu
-        self.recent_menu = file_menu.addMenu("Recent Files")
+        self.recent_menu = self.file_menu.addMenu("Recent Files")
+        
+        # Add global shortcut for Recent Files
+        recent_shortcut = QAction("Recent Files", self)
+        recent_shortcut.setShortcut("Ctrl+Shift+O")
+        recent_shortcut.triggered.connect(self.show_recent_menu)
+        self.addAction(recent_shortcut)
         
         # Settings menu
         settings_menu = menubar.addMenu("Settings")
@@ -91,6 +137,15 @@ class ParquetViewer(QMainWindow):
         self.wrap_text_action.triggered.connect(self.toggle_wrap_text)
         settings_menu.addAction(self.wrap_text_action)
         
+        # Edit mode action
+        self.edit_mode_action = QAction("Enable Editing", self)
+        self.edit_mode_action.setCheckable(True)
+        self.edit_mode_action.setShortcut("Ctrl+E")
+        self.edit_mode_action.triggered.connect(self.toggle_edit_mode)
+        settings_menu.addAction(self.edit_mode_action)
+        
+        settings_menu.addSeparator()
+        
         # Reset view action
         reset_view_action = QAction("Reset View", self)
         reset_view_action.triggered.connect(self.reset_view)
@@ -102,6 +157,7 @@ class ParquetViewer(QMainWindow):
             self.config.read(self.config_file)
             self.dark_mode = self.config.getboolean('Settings', 'dark_mode', fallback=False)
             self.wrap_text = self.config.getboolean('Settings', 'wrap_text', fallback=False)
+            self.edit_mode = self.config.getboolean('Settings', 'edit_mode', fallback=False)
             self.last_folder = self.config.get('Settings', 'last_folder', fallback=os.path.join(os.path.expanduser('~'), 'Documents'))
             # Load recent files
             self.recent_files = self.config.get('Settings', 'recent_files', fallback='').split('|')
@@ -109,6 +165,7 @@ class ParquetViewer(QMainWindow):
         else:
             self.dark_mode = False
             self.wrap_text = False
+            self.edit_mode = False
             self.last_folder = os.path.join(os.path.expanduser('~'), 'Documents')
             self.recent_files = []
             self.save_settings()
@@ -121,6 +178,10 @@ class ParquetViewer(QMainWindow):
             self.dark_mode_action.setChecked(self.dark_mode)
         if hasattr(self, 'wrap_text_action'):
             self.wrap_text_action.setChecked(self.wrap_text)
+        if hasattr(self, 'edit_mode_action'):
+            self.edit_mode_action.setChecked(self.edit_mode)
+        
+        self.update_status_bar()
 
     def save_settings(self):
         """Save current settings to config file"""
@@ -128,6 +189,7 @@ class ParquetViewer(QMainWindow):
             self.config.add_section('Settings')
         self.config.set('Settings', 'dark_mode', str(self.dark_mode))
         self.config.set('Settings', 'wrap_text', str(self.wrap_text))
+        self.config.set('Settings', 'edit_mode', str(self.edit_mode))
         self.config.set('Settings', 'last_folder', self.last_folder)
         # Save recent files
         self.config.set('Settings', 'recent_files', '|'.join(self.recent_files))
@@ -146,6 +208,194 @@ class ParquetViewer(QMainWindow):
         self.save_settings()
         self.update_table_wrapping()
 
+    def toggle_edit_mode(self):
+        """Toggle edit mode for the table"""
+        if self.modified and self.edit_mode:
+            # If trying to exit edit mode with unsaved changes
+            reply = QMessageBox.question(
+                self, "Save Changes?",
+                "You have unsaved changes. What would you like to do?",
+                QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
+                QMessageBox.Save
+            )
+            
+            if reply == QMessageBox.Save:
+                if not self.save_file():
+                    # If save failed, don't exit edit mode
+                    self.edit_mode_action.setChecked(True)
+                    return
+            elif reply == QMessageBox.Cancel:
+                # Keep edit mode on
+                self.edit_mode_action.setChecked(True)
+                return
+            # If Discard, continue with toggling edit mode off
+            else:
+                # Reset modified state when discarding changes
+                self.modified = False
+                self.modified_cells.clear()
+        
+        self.edit_mode = self.edit_mode_action.isChecked()
+        self.save_settings()
+        
+        # Update cell flags based on edit mode
+        for row in range(self.table.rowCount()):
+            for col in range(self.table.columnCount()):
+                item = self.table.item(row, col)
+                if item:
+                    if self.edit_mode:
+                        item.setFlags(item.flags() | Qt.ItemIsEditable)
+                    else:
+                        item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+        
+        # Reset modified state when entering edit mode (treat like opening a new file)
+        if self.edit_mode:
+            self.modified = False
+            self.modified_cells.clear()
+        
+        # Update UI elements - don't enable save until actual changes are made
+        self.save_action.setEnabled(self.edit_mode and self.modified)
+        self.save_as_action.setEnabled(self.edit_mode)
+        self.update_status_bar()
+
+    def on_cell_changed(self, item):
+        """Handle cell content changes"""
+        if not self.edit_mode:
+            return
+            
+        row = item.row()
+        col = item.column()
+        new_value = item.text()
+        
+        try:
+            # Get the column name and data type
+            col_name = self.table.horizontalHeaderItem(col).text()
+            dtype = self.column_types.get(col_name)
+            
+            if dtype:
+                # Validate and convert the new value
+                if pd.isna(new_value) or new_value == '':
+                    converted_value = None
+                elif dtype == 'int64':
+                    converted_value = int(new_value)
+                elif dtype == 'float64':
+                    converted_value = float(new_value)
+                elif dtype == 'bool':
+                    converted_value = bool(new_value.lower() in ['true', '1', 'yes'])
+                elif dtype == 'datetime64[ns]':
+                    converted_value = pd.to_datetime(new_value)
+                else:
+                    converted_value = str(new_value)
+                
+                # Update the DataFrame
+                self.original_df.iloc[row, col] = converted_value
+                
+                # Mark as modified
+                self.modified = True
+                self.modified_cells.add((row, col))
+                self.save_action.setEnabled(True)
+                
+                # Update cell display
+                if converted_value is not None:
+                    item.setText(str(converted_value))
+                else:
+                    item.setText('')
+                
+                # Update status
+                self.update_status_bar()
+                
+            else:
+                # If no dtype found, treat as string
+                self.original_df.iloc[row, col] = new_value
+                self.modified = True
+                self.modified_cells.add((row, col))
+                self.save_action.setEnabled(True)
+                self.update_status_bar()
+                
+        except (ValueError, TypeError) as e:
+            # Restore the original value
+            QMessageBox.warning(self, "Invalid Value", 
+                              f"Could not convert '{new_value}' to required type: {str(e)}")
+            original_value = str(self.original_df.iloc[row, col])
+            item.setText(original_value)
+
+    def update_status_bar(self):
+        """Update status bar with current state"""
+        # Update edit mode status
+        self.edit_mode_label.setText("Edit Mode: ON" if self.edit_mode else "Edit Mode: OFF")
+        
+        # Update modified status
+        if self.modified:
+            self.modified_label.setText("Modified")
+            self.modified_label.setStyleSheet("color: red;")
+        else:
+            self.modified_label.setText("")
+            self.modified_label.setStyleSheet("")
+
+    def save_file(self):
+        """Save the current file"""
+        if not self.current_file:
+            return self.save_file_as()
+            
+        try:
+            # Save the file
+            self.original_df.to_parquet(self.current_file)
+            
+            # Reset modified state
+            self.modified = False
+            self.modified_cells.clear()
+            self.save_action.setEnabled(False)
+            self.update_status_bar()
+            
+            # Show success message
+            self.status_bar.showMessage("File saved successfully", 3000)
+            
+            return True
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Save Error", f"Error saving file: {str(e)}")
+            return False
+
+    def save_file_as(self):
+        """Save the current file with a new name"""
+        if not self.original_df is not None:
+            return False
+            
+        file_name, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save Parquet File",
+            self.last_folder,
+            "Parquet Files (*.parquet);;All Files (*)"
+        )
+        
+        if file_name:
+            # Update current file and save
+            self.current_file = file_name
+            self.last_folder = os.path.dirname(file_name)
+            self.save_settings()
+            return self.save_file()
+            
+        return False
+
+    def closeEvent(self, event):
+        """Handle application close event"""
+        if self.modified:
+            reply = QMessageBox.question(
+                self, "Save Changes?",
+                "The document has been modified. Do you want to save your changes?",
+                QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
+                QMessageBox.Save
+            )
+            
+            if reply == QMessageBox.Save:
+                if not self.save_file():
+                    event.ignore()
+                    return
+            elif reply == QMessageBox.Cancel:
+                event.ignore()
+                return
+        
+        event.accept()
+
     def show_context_menu(self, position):
         """Show context menu for copying cell contents"""
         menu = QMenu()
@@ -156,29 +406,37 @@ class ParquetViewer(QMainWindow):
         if selected_items:
             action = menu.exec_(self.table.viewport().mapToGlobal(position))
             if action == copy_action:
-                # Get unique rows and columns to maintain selection order
-                rows = sorted(set(item.row() for item in selected_items))
-                cols = sorted(set(item.column() for item in selected_items))
-                
-                # Create a list of lists to store the data
-                data = []
-                current_row = []
-                last_row = -1
-                
-                for item in selected_items:
-                    if item.row() != last_row:
-                        if current_row:
-                            data.append(current_row)
-                        current_row = []
-                        last_row = item.row()
-                    current_row.append(item.text())
-                
+                self.show_context_menu_copy()
+
+    def show_context_menu_copy(self):
+        """Handle copying of selected cells"""
+        selected_items = self.table.selectedItems()
+        if not selected_items:
+            return
+            
+        # Get unique rows and columns to maintain selection order
+        rows = sorted(set(item.row() for item in selected_items))
+        cols = sorted(set(item.column() for item in selected_items))
+        
+        # Create a list of lists to store the data
+        data = []
+        current_row = []
+        last_row = -1
+        
+        for item in selected_items:
+            if item.row() != last_row:
                 if current_row:
                     data.append(current_row)
-                
-                # Convert to tab-separated string
-                text_to_copy = '\n'.join('\t'.join(row) for row in data)
-                QApplication.clipboard().setText(text_to_copy)
+                current_row = []
+                last_row = item.row()
+            current_row.append(item.text())
+        
+        if current_row:
+            data.append(current_row)
+        
+        # Convert to tab-separated string
+        text_to_copy = '\n'.join('\t'.join(row) for row in data)
+        QApplication.clipboard().setText(text_to_copy)
 
     def on_column_resize(self, logical_index, old_size, new_size):
         """Handle manual column resize"""
@@ -369,7 +627,11 @@ class ParquetViewer(QMainWindow):
         for file_path in self.recent_files:
             action = QAction(os.path.basename(file_path), self)
             action.setStatusTip(file_path)
-            action.triggered.connect(lambda checked, path=file_path: self.open_recent_file(path))
+            # Use a lambda that also closes the parent menu
+            action.triggered.connect(
+                lambda checked, path=file_path: 
+                (self.open_recent_file(path))
+            )
             self.recent_menu.addAction(action)
 
     def add_to_recent_files(self, file_path):
@@ -384,6 +646,10 @@ class ParquetViewer(QMainWindow):
     def open_recent_file(self, file_path):
         """Open a file from the recent files menu"""
         if os.path.exists(file_path):
+            # Close all menus before opening the file
+            self.file_menu.hide()
+            self.recent_menu.hide()
+            # Load the file
             self.load_parquet_file(file_path)
         else:
             QMessageBox.warning(self, "File Not Found", 
@@ -397,6 +663,15 @@ class ParquetViewer(QMainWindow):
         try:
             # Read the parquet file
             df = pd.read_parquet(file_name)
+            
+            # Store the original DataFrame and file info
+            self.original_df = df.copy()  # Make a copy to track changes
+            self.current_file = file_name
+            self.modified = False  # Start as unmodified
+            self.modified_cells.clear()
+            
+            # Store column types
+            self.column_types = dict(df.dtypes)
             
             # Update window title with file name
             base_name = os.path.basename(file_name)
@@ -414,14 +689,22 @@ class ParquetViewer(QMainWindow):
             # Populate the table
             for i in range(len(df)):
                 for j in range(len(df.columns)):
-                    item = QTableWidgetItem(str(df.iloc[i, j]))
-                    item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+                    value = df.iloc[i, j]
+                    item = QTableWidgetItem(str(value) if pd.notna(value) else '')
+                    
+                    # Set flags based on edit mode
+                    if self.edit_mode:
+                        item.setFlags(item.flags() | Qt.ItemIsEditable)
+                    else:
+                        item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+                    
                     if self.wrap_text:
                         item.setTextAlignment(Qt.AlignLeft | Qt.AlignTop)
                         item.setFlags(item.flags() | Qt.TextWordWrap)
                     else:
                         item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
                         item.setFlags(item.flags() & ~Qt.TextWordWrap)
+                    
                     self.table.setItem(i, j, item)
             
             # Enable sorting after data is loaded
@@ -439,6 +722,13 @@ class ParquetViewer(QMainWindow):
                 header_height = self.table.horizontalHeader().height()
                 for row in range(self.table.rowCount()):
                     self.table.setRowHeight(row, header_height)
+            
+            # Update UI state - ensure modified is False when loading new file
+            self.modified = False
+            self.modified_cells.clear()
+            self.save_action.setEnabled(False)
+            self.save_as_action.setEnabled(self.edit_mode)
+            self.update_status_bar()
             
             # Add to recent files
             self.add_to_recent_files(file_name)
@@ -542,11 +832,82 @@ class ParquetViewer(QMainWindow):
             self.setStyleSheet("")  # Reset to default light theme
             self.setPalette(self.style().standardPalette())  # Reset to default palette
         
-    def keyPressEvent(self, event):
-        """Handle key press events"""
-        if event.key() == Qt.Key_Escape:
-            self.table.clearSelection()
-        super().keyPressEvent(event)
+    def eventFilter(self, source, event):
+        """Handle keyboard shortcuts for the table"""
+        if source is self.table and event.type() == event.KeyPress:
+            key = event.key()
+            modifiers = event.modifiers()
+            
+            # Handle Ctrl+C
+            if modifiers & Qt.ControlModifier and key == Qt.Key_C:
+                self.show_context_menu_copy()
+                return True
+                
+            # Handle Ctrl+E
+            elif modifiers & Qt.ControlModifier and key == Qt.Key_E:
+                self.edit_mode_action.trigger()
+                return True
+                
+            # Handle Shift+Space (select row)
+            elif modifiers & Qt.ShiftModifier and key == Qt.Key_Space:
+                if self.table.currentItem():
+                    self.table.selectRow(self.table.currentRow())
+                return True
+                
+            # Handle Ctrl+Space (select column)
+            elif modifiers & Qt.ControlModifier and key == Qt.Key_Space:
+                if self.table.currentItem():
+                    self.table.selectColumn(self.table.currentColumn())
+                return True
+                
+            elif key in (Qt.Key_Return, Qt.Key_Enter):
+                # If we're not in edit mode, ignore
+                if not self.edit_mode:
+                    return False
+                    
+                current = self.table.currentItem()
+                if not current:
+                    return False
+                    
+                # If cell is already in edit mode, this will trigger the editor to close and accept
+                if self.table.state() == QTableWidget.EditingState:
+                    return False
+                    
+                # Start editing the current cell
+                self.table.editItem(current)
+                return True
+                
+            elif key == Qt.Key_Delete:
+                # If we're not in edit mode, ignore
+                if not self.edit_mode:
+                    return False
+                    
+                # Get all selected items
+                selected_items = self.table.selectedItems()
+                if not selected_items:
+                    return False
+                    
+                # Clear the contents of all selected cells
+                for item in selected_items:
+                    row = item.row()
+                    col = item.column()
+                    
+                    # Update the DataFrame
+                    self.original_df.iloc[row, col] = None
+                    
+                    # Update the table item
+                    item.setText('')
+                    
+                    # Mark as modified
+                    self.modified = True
+                    self.modified_cells.add((row, col))
+                
+                # Update UI
+                self.save_action.setEnabled(True)
+                self.update_status_bar()
+                return True
+                
+        return super().eventFilter(source, event)
 
     def reset_view(self):
         """Reset the view by clearing filters and sorting"""
@@ -662,6 +1023,19 @@ class ParquetViewer(QMainWindow):
         
         # Adjust columns to ensure proper layout
         self.adjust_all_columns()
+
+    def show_recent_menu(self):
+        """Show the File menu and Recent Files submenu as if clicked naturally"""
+        # Get the File menu button in the menu bar
+        menu_bar = self.menuBar()
+        file_action = self.file_menu.menuAction()
+        file_button_rect = menu_bar.actionGeometry(file_action)
+        
+        # Calculate the position for the File menu
+        file_pos = menu_bar.mapToGlobal(file_button_rect.bottomLeft())
+        
+        # Show the File menu using exec_ which handles menu closing properly
+        self.file_menu.exec_(file_pos)
 
 def main():
     app = QApplication(sys.argv)
