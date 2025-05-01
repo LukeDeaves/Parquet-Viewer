@@ -5,7 +5,7 @@ import pandas as pd
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                             QPushButton, QFileDialog, QTableWidget, QTableWidgetItem,
                             QMenuBar, QMenu, QAction, QMessageBox, QFrame, QDialog, QLineEdit, QDialogButtonBox,
-                            QLabel, QStatusBar)
+                            QLabel, QStatusBar, QTableWidgetSelectionRange)
 from PyQt5.QtCore import Qt, QPoint, QTimer
 from PyQt5.QtGui import QPalette, QColor, QCursor
 import configparser
@@ -838,6 +838,11 @@ class ParquetViewer(QMainWindow):
             key = event.key()
             modifiers = event.modifiers()
             
+            # Handle Escape (clear selection)
+            if key == Qt.Key_Escape:
+                self.table.clearSelection()
+                return True
+            
             # Handle Ctrl+C
             if modifiers & Qt.ControlModifier and key == Qt.Key_C:
                 self.show_context_menu_copy()
@@ -851,13 +856,29 @@ class ParquetViewer(QMainWindow):
             # Handle Shift+Space (select row)
             elif modifiers & Qt.ShiftModifier and key == Qt.Key_Space:
                 if self.table.currentItem():
-                    self.table.selectRow(self.table.currentRow())
+                    current_row = self.table.currentRow()
+                    # Select the entire row
+                    self.table.setRangeSelected(
+                        QTableWidgetSelectionRange(
+                            current_row, 0,
+                            current_row, self.table.columnCount() - 1
+                        ),
+                        True
+                    )
                 return True
                 
             # Handle Ctrl+Space (select column)
             elif modifiers & Qt.ControlModifier and key == Qt.Key_Space:
                 if self.table.currentItem():
-                    self.table.selectColumn(self.table.currentColumn())
+                    current_col = self.table.currentColumn()
+                    # Select the entire column without moving the current cell
+                    self.table.setRangeSelected(
+                        QTableWidgetSelectionRange(
+                            0, current_col,
+                            self.table.rowCount() - 1, current_col
+                        ),
+                        True
+                    )
                 return True
                 
             elif key in (Qt.Key_Return, Qt.Key_Enter):
