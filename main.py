@@ -7,7 +7,7 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                             QMenuBar, QMenu, QAction, QMessageBox, QFrame, QDialog, QLineEdit, QDialogButtonBox,
                             QLabel, QStatusBar, QTableWidgetSelectionRange)
 from PyQt5.QtCore import Qt, QPoint, QTimer
-from PyQt5.QtGui import QPalette, QColor, QCursor
+from PyQt5.QtGui import QPalette, QColor, QCursor, QBrush
 import configparser
 from pathlib import Path
 import numpy as np
@@ -20,27 +20,26 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 # Command pattern for undo/redo
 class EditCommand:
-    def __init__(self, row: int, col: int, old_value: Any, new_value: Any):
-        self.row = row
-        self.col = col
-        self.old_value = old_value
-        self.new_value = new_value
+    def __init__(self, changes: List[Tuple[int, int, Any, Any]]):
+        self.changes = changes  # List of (row, col, old_value, new_value)
 
     def undo(self, table: QTableWidget, df: pd.DataFrame):
-        # Update DataFrame
-        df.iloc[self.row, self.col] = self.old_value
-        # Update table
-        item = table.item(self.row, self.col)
-        if item:
-            item.setText(str(self.old_value) if pd.notna(self.old_value) else '')
+        for row, col, old_value, _ in self.changes:
+            # Update DataFrame
+            df.iloc[row, col] = old_value
+            # Update table
+            item = table.item(row, col)
+            if item:
+                item.setText(str(old_value) if pd.notna(old_value) else '')
 
     def redo(self, table: QTableWidget, df: pd.DataFrame):
-        # Update DataFrame
-        df.iloc[self.row, self.col] = self.new_value
-        # Update table
-        item = table.item(self.row, self.col)
-        if item:
-            item.setText(str(self.new_value) if pd.notna(self.new_value) else '')
+        for row, col, _, new_value in self.changes:
+            # Update DataFrame
+            df.iloc[row, col] = new_value
+            # Update table
+            item = table.item(row, col)
+            if item:
+                item.setText(str(new_value) if pd.notna(new_value) else '')
 
 class CommandStack:
     def __init__(self):
@@ -76,6 +75,39 @@ class CommandStack:
     def clear(self):
         self.undo_stack.clear()
         self.redo_stack.clear()
+
+class StatsBar(QFrame):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFrameStyle(QFrame.Panel | QFrame.Sunken)
+        
+        # Create layout
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(5, 2, 5, 2)
+        
+        # Create labels for statistics
+        self.stats_label = QLabel()
+        self.stats_label.setTextFormat(Qt.RichText)
+        layout.addWidget(self.stats_label)
+        
+        # Set fixed height
+        self.setFixedHeight(25)
+        
+    def update_stats(self, selection_stats=None):
+        if not selection_stats:
+            self.stats_label.setText("")
+            return
+            
+        count, sum_val, avg = selection_stats
+        stats_text = f"Count: {count:,}"
+        
+        if sum_val is not None:
+            stats_text += f" | Sum: {sum_val:,.2f}"
+        
+        if avg is not None:
+            stats_text += f" | Average: {avg:,.2f}"
+            
+        self.stats_label.setText(stats_text)
 
 class ParquetViewer(QMainWindow):
     def __init__(self):
@@ -148,6 +180,10 @@ class ParquetViewer(QMainWindow):
         
         layout.addWidget(self.table)
         
+        # Add stats bar
+        self.stats_bar = StatsBar()
+        layout.addWidget(self.stats_bar)
+        
         # Store filter values
         self.filters = {}
         
@@ -162,6 +198,9 @@ class ParquetViewer(QMainWindow):
         self.selection_timer = QTimer(self)
         self.selection_timer.timeout.connect(self.toggle_selection_highlight)
         self.selection_visible = True
+        
+        # Add flag to prevent recursive updates
+        self.updating_totals = False
         
     def init_actions(self):
         """Initialize all actions"""
@@ -323,25 +362,43 @@ class ParquetViewer(QMainWindow):
         """Toggle edit mode for the table"""
         if self.modified and self.edit_mode:
             # If trying to exit edit mode with unsaved changes
-            reply = QMessageBox.question(
-                self, "Save Changes?",
-                "You have unsaved changes. What would you like to do?",
-                QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
-                QMessageBox.Save
-            )
+            msg_box = QMessageBox()
+            msg_box.setWindowTitle("Save Changes?")
+            msg_box.setText("You have unsaved changes. What would you like to do?")
             
-            if reply == QMessageBox.Save:
+            # Create custom buttons with keyboard shortcuts
+            save_btn = msg_box.addButton("&Save", QMessageBox.AcceptRole)
+            no_btn = msg_box.addButton("&No", QMessageBox.RejectRole)
+            cancel_btn = msg_box.addButton("&Cancel", QMessageBox.RejectRole)
+            msg_box.setDefaultButton(save_btn)
+            msg_box.setEscapeButton(cancel_btn)
+            
+            # Force showing mnemonics (underlines)
+            msg_box.setStyle(QApplication.style())
+            msg_box.setStyleSheet("""
+                QPushButton {
+                    color: palette(text);
+                }
+                QPushButton::mnemonicLabel {
+                    text-decoration: underline;
+                }
+            """)
+            
+            msg_box.exec_()
+            clicked_button = msg_box.clickedButton()
+            
+            if clicked_button == save_btn:
                 if not self.save_file():
                     # If save failed, don't exit edit mode
                     self.edit_mode_action.setChecked(True)
                     return
-            elif reply == QMessageBox.Cancel:
+            elif clicked_button == no_btn:
+                # If No, revert all changes
+                self.revert_all_changes()
+            else:  # Cancel or Escape
                 # Keep edit mode on
                 self.edit_mode_action.setChecked(True)
                 return
-            # If Discard, revert all changes
-            else:
-                self.revert_all_changes()
         
         self.edit_mode = self.edit_mode_action.isChecked()
         self.save_settings()
@@ -370,12 +427,19 @@ class ParquetViewer(QMainWindow):
 
     def on_cell_changed(self, item):
         """Handle cell content changes"""
-        if not self.edit_mode:
+        if not self.edit_mode or self.updating_totals:
             return
             
         row = item.row()
         col = item.column()
-        new_value = item.text()
+        
+        # Check if this is the totals row (last row)
+        if row == self.table.rowCount() - 1:
+            # Don't allow changes to totals row
+            self.update_column_totals()
+            return
+            
+        new_value = item.text().strip()
         
         try:
             # Get the column name and data type
@@ -390,9 +454,13 @@ class ParquetViewer(QMainWindow):
                 if pd.isna(new_value) or new_value == '':
                     converted_value = None
                 elif dtype == 'int64':
-                    converted_value = int(new_value)
+                    # Remove commas for integer conversion
+                    clean_value = new_value.replace(',', '')
+                    converted_value = int(float(clean_value))
                 elif dtype == 'float64':
-                    converted_value = float(new_value)
+                    # Remove commas for float conversion
+                    clean_value = new_value.replace(',', '')
+                    converted_value = float(clean_value)
                 elif dtype == 'bool':
                     converted_value = bool(new_value.lower() in ['true', '1', 'yes'])
                 elif dtype == 'datetime64[ns]':
@@ -401,7 +469,7 @@ class ParquetViewer(QMainWindow):
                     converted_value = str(new_value)
                 
                 # Create and push the edit command
-                command = EditCommand(row, col, old_value, converted_value)
+                command = EditCommand([(row, col, old_value, converted_value)])
                 self.command_stack.push(command)
                 
                 # Update the DataFrame
@@ -412,9 +480,13 @@ class ParquetViewer(QMainWindow):
                 self.modified_cells.add((row, col))
                 self.save_action.setEnabled(True)
                 
-                # Update cell display
+                # Update cell display with proper formatting
                 if converted_value is not None:
-                    item.setText(str(converted_value))
+                    if isinstance(converted_value, (int, float)):
+                        item.setText(f"{converted_value:,}")
+                        item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                    else:
+                        item.setText(str(converted_value))
                 else:
                     item.setText('')
                 
@@ -422,9 +494,15 @@ class ParquetViewer(QMainWindow):
                 self.update_undo_redo_state()
                 self.update_status_bar()
                 
+                # Update statistics after cell change
+                self.calculate_selection_stats()
+                
+                # Update column totals
+                self.update_column_totals()
+                
             else:
                 # If no dtype found, treat as string
-                command = EditCommand(row, col, old_value, new_value)
+                command = EditCommand([(row, col, old_value, new_value)])
                 self.command_stack.push(command)
                 
                 self.original_df.iloc[row, col] = new_value
@@ -436,12 +514,24 @@ class ParquetViewer(QMainWindow):
                 self.update_undo_redo_state()
                 self.update_status_bar()
                 
+                # Update statistics after cell change
+                self.calculate_selection_stats()
+                
+                # Update column totals
+                self.update_column_totals()
+                
         except (ValueError, TypeError) as e:
             # Restore the original value
             QMessageBox.warning(self, "Invalid Value", 
                               f"Could not convert '{new_value}' to required type: {str(e)}")
-            original_value = str(self.original_df.iloc[row, col])
-            item.setText(original_value)
+            if pd.notna(old_value):
+                if isinstance(old_value, (int, float)):
+                    item.setText(f"{old_value:,}")
+                    item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                else:
+                    item.setText(str(old_value))
+            else:
+                item.setText('')
 
     def update_status_bar(self):
         """Update status bar with current state"""
@@ -455,6 +545,12 @@ class ParquetViewer(QMainWindow):
         else:
             self.modified_label.setText("")
             self.modified_label.setStyleSheet("")
+            
+        # Update window title to show modified state
+        if self.current_file:
+            base_name = os.path.basename(self.current_file)
+            name_without_ext = os.path.splitext(base_name)[0]
+            self.setWindowTitle(f"{'*' if self.modified else ''}{name_without_ext} - Parquet File Viewer")
 
     def save_file(self):
         """Save the current file"""
@@ -468,7 +564,9 @@ class ParquetViewer(QMainWindow):
             # Reset modified state
             self.modified = False
             self.modified_cells.clear()
+            self.command_stack.clear()  # Clear command stack after successful save
             self.save_action.setEnabled(False)
+            self.update_undo_redo_state()
             self.update_status_bar()
             
             # Show success message
@@ -477,7 +575,7 @@ class ParquetViewer(QMainWindow):
             return True
             
         except Exception as e:
-            QMessageBox.critical(self, "Save Error", f"Error saving file: {str(e)}")
+            QMessageBox.critical(self, "Error", f"Error saving file: {str(e)}")
             return False
 
     def save_file_as(self):
@@ -504,20 +602,39 @@ class ParquetViewer(QMainWindow):
     def closeEvent(self, event):
         """Handle application close event"""
         if self.modified:
-            reply = QMessageBox.question(
-                self, "Save Changes?",
-                "The document has been modified. Do you want to save your changes?",
-                QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
-                QMessageBox.Save
-            )
+            msg_box = QMessageBox()
+            msg_box.setWindowTitle("Save Changes?")
+            msg_box.setText("The document has been modified. Do you want to save your changes?")
             
-            if reply == QMessageBox.Save:
+            # Create custom buttons with keyboard shortcuts
+            save_btn = msg_box.addButton("&Save", QMessageBox.AcceptRole)
+            no_btn = msg_box.addButton("&No", QMessageBox.RejectRole)
+            cancel_btn = msg_box.addButton("&Cancel", QMessageBox.RejectRole)
+            msg_box.setDefaultButton(save_btn)
+            msg_box.setEscapeButton(cancel_btn)
+            
+            # Force showing mnemonics (underlines)
+            msg_box.setStyle(QApplication.style())
+            msg_box.setStyleSheet("""
+                QPushButton {
+                    color: palette(text);
+                }
+                QPushButton::mnemonicLabel {
+                    text-decoration: underline;
+                }
+            """)
+            
+            msg_box.exec_()
+            clicked_button = msg_box.clickedButton()
+            
+            if clicked_button == save_btn:
                 if not self.save_file():
                     event.ignore()
                     return
-            elif reply == QMessageBox.Cancel:
+            elif clicked_button == cancel_btn:  # Cancel or Escape
                 event.ignore()
                 return
+            # If No, just continue with close
         
         event.accept()
 
@@ -739,6 +856,9 @@ class ParquetViewer(QMainWindow):
                     break
             self.table.setRowHidden(row, not show_row)
 
+        # Update column totals after filtering
+        self.update_column_totals()
+
     def update_recent_files_menu(self):
         """Update the recent files menu with current list of files"""
         self.recent_menu.clear()
@@ -784,86 +904,119 @@ class ParquetViewer(QMainWindow):
             self.update_recent_files_menu()
 
     def load_parquet_file(self, file_name):
-        """Load and display a parquet file"""
         try:
-            # Read the parquet file
-            df = pd.read_parquet(file_name)
-            
-            # Store the original DataFrame and file info
-            self.original_df = df.copy()  # Make a copy to track changes
-            self.current_file = file_name
-            self.modified = False  # Start as unmodified
-            self.modified_cells.clear()
+            # Load the parquet file
+            self.df = pd.read_parquet(file_name)
+            self.original_df = self.df.copy()
             
             # Store column types
-            self.column_types = dict(df.dtypes)
+            self.column_types = self.df.dtypes.to_dict()
             
-            # Update window title with file name
-            base_name = os.path.basename(file_name)
-            name_without_ext = os.path.splitext(base_name)[0]
-            self.setWindowTitle(f"{name_without_ext} - Parquet File Viewer")
+            # Reset the table
+            self.table.clear()
+            self.table.setRowCount(0)
+            self.table.setColumnCount(0)
             
-            # Clear existing filters
-            self.filters.clear()
+            # Set column headers
+            self.table.setColumnCount(len(self.df.columns))
+            self.table.setHorizontalHeaderLabels(self.df.columns.astype(str))
             
-            # Set up the table
-            self.table.setRowCount(len(df))
-            self.table.setColumnCount(len(df.columns))
-            self.table.setHorizontalHeaderLabels(df.columns)
+            # Set row count (add 1 for totals row)
+            self.table.setRowCount(len(self.df) + 1)
             
             # Populate the table
-            for i in range(len(df)):
-                for j in range(len(df.columns)):
-                    value = df.iloc[i, j]
-                    item = QTableWidgetItem(str(value) if pd.notna(value) else '')
-                    
-                    # Set flags based on edit mode
-                    if self.edit_mode:
-                        item.setFlags(item.flags() | Qt.ItemIsEditable)
+            for i, col in enumerate(self.df.columns):
+                for j in range(len(self.df)):
+                    val = self.df.iloc[j, i]
+                    item = QTableWidgetItem()
+                    if pd.isna(val):
+                        item.setText('')
                     else:
-                        item.setFlags(item.flags() & ~Qt.ItemIsEditable)
-                    
-                    if self.wrap_text:
-                        item.setTextAlignment(Qt.AlignLeft | Qt.AlignTop)
-                        item.setFlags(item.flags() | Qt.TextWordWrap)
-                    else:
-                        item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-                        item.setFlags(item.flags() & ~Qt.TextWordWrap)
-                    
-                    self.table.setItem(i, j, item)
+                        if isinstance(val, (int, float)):
+                            item.setText(f"{val:,}")
+                            item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                        else:
+                            item.setText(str(val))
+                    self.table.setItem(j, i, item)
             
-            # Enable sorting after data is loaded
-            self.table.setSortingEnabled(True)
+            # Add totals row
+            self.update_column_totals()
             
-            # First adjust column widths
-            self.adjust_all_columns()
+            # Update window title
+            self.setWindowTitle(f"Parquet File Viewer - {os.path.basename(file_name)}")
+            self.current_file = file_name
             
-            # Then set appropriate row heights based on wrap setting and adjusted columns
-            if self.wrap_text:
-                # Process events to ensure column adjustments are applied
-                QApplication.processEvents()
-                self.table.resizeRowsToContents()
-            else:
-                header_height = self.table.horizontalHeader().height()
-                for row in range(self.table.rowCount()):
-                    self.table.setRowHeight(row, header_height)
-            
-            # Update UI state - ensure modified is False when loading new file
+            # Reset modified state
             self.modified = False
             self.modified_cells.clear()
-            self.save_action.setEnabled(False)
-            self.save_as_action.setEnabled(self.edit_mode)
+            self.command_stack.clear()
             self.update_status_bar()
             
             # Add to recent files
             self.add_to_recent_files(file_name)
             
-            # Clear command stack when loading new file
-            self.command_stack.clear()
-            self.update_undo_redo_state()
+            # Apply initial column widths
+            self.adjust_all_columns()
+            
+            # Update the recent files menu
+            self.update_recent_files_menu()
+            
+            # Clear filters
+            self.filters.clear()
+            
+            # Enable sorting
+            self.table.setSortingEnabled(True)
             
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Error reading file: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to load parquet file: {str(e)}")
+            return False
+        return True
+
+    def update_column_totals(self):
+        """Update the totals row at the bottom of the table"""
+        if self.table.rowCount() == 0:
+            return
+            
+        self.updating_totals = True
+        try:
+            last_row = self.table.rowCount() - 1
+            
+            # Create "Total" label for the first column
+            total_label = QTableWidgetItem("Total")
+            total_label.setBackground(QBrush(QColor("#f0f0f0")))
+            total_label.setFlags(Qt.ItemIsEnabled)  # Make it read-only
+            self.table.setItem(last_row, 0, total_label)
+            
+            # Calculate totals for each column
+            for col in range(self.table.columnCount()):
+                if col == 0:  # Skip first column as it has the "Total" label
+                    continue
+                    
+                numeric_values = []
+                for row in range(last_row):  # Exclude the totals row
+                    item = self.table.item(row, col)
+                    if item:
+                        try:
+                            value = float(item.text().replace(',', ''))
+                            numeric_values.append(value)
+                        except (ValueError, TypeError):
+                            continue
+                
+                # Create total item
+                total_item = QTableWidgetItem()
+                total_item.setBackground(QBrush(QColor("#f0f0f0")))
+                total_item.setFlags(Qt.ItemIsEnabled)  # Make it read-only
+                
+                if numeric_values:
+                    total = sum(numeric_values)
+                    total_item.setText(f"{total:,.2f}")
+                    total_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                else:
+                    total_item.setText("")
+                    
+                self.table.setItem(last_row, col, total_item)
+        finally:
+            self.updating_totals = False
 
     def open_file(self):
         # Check if last folder exists, if not use Documents
@@ -967,8 +1120,9 @@ class ParquetViewer(QMainWindow):
             key = event.key()
             modifiers = event.modifiers()
             
-            # Handle Escape (clear selection)
+            # Handle Escape (clear selection and copy highlighting)
             if key == Qt.Key_Escape:
+                self.clear_copy_highlighting()
                 self.table.clearSelection()
                 return True
             
@@ -1057,6 +1211,10 @@ class ParquetViewer(QMainWindow):
                 self.update_status_bar()
                 return True
                 
+        elif source == self.table and event.type() == event.MouseButtonRelease:
+            # Update statistics when selection changes
+            self.calculate_selection_stats()
+                
         return super().eventFilter(source, event)
 
     def reset_view(self):
@@ -1073,6 +1231,9 @@ class ParquetViewer(QMainWindow):
         self.filters.clear()
         self.apply_filters()
         self.update_header_style()
+
+        # Update column totals after clearing filters
+        self.update_column_totals()
 
     def resizeEvent(self, event):
         """Handle window resize events"""
@@ -1218,20 +1379,40 @@ class ParquetViewer(QMainWindow):
 
     def undo_edit(self):
         """Handle undo action"""
+        if not self.edit_mode:
+            return
+            
         if self.command_stack.undo(self.table, self.original_df):
-            self.update_undo_redo_state()
-            # Update modified state
+            # Update modified state based on remaining undo stack
             self.modified = len(self.command_stack.undo_stack) > 0
+            self.modified_cells = set()  # Reset modified cells
+            
+            # If there are still undo commands, rebuild modified cells set
+            if self.modified:
+                for command in self.command_stack.undo_stack:
+                    for row, col, _, _ in command.changes:
+                        self.modified_cells.add((row, col))
+            
             self.save_action.setEnabled(self.modified)
+            self.update_undo_redo_state()
             self.update_status_bar()
 
     def redo_edit(self):
         """Handle redo action"""
+        if not self.edit_mode:
+            return
+            
         if self.command_stack.redo(self.table, self.original_df):
-            self.update_undo_redo_state()
-            # Update modified state
             self.modified = True
+            
+            # Update modified cells from the last redone command
+            if self.command_stack.undo_stack:
+                last_command = self.command_stack.undo_stack[-1]
+                for row, col, _, _ in last_command.changes:
+                    self.modified_cells.add((row, col))
+            
             self.save_action.setEnabled(True)
+            self.update_undo_redo_state()
             self.update_status_bar()
 
     def update_undo_redo_state(self):
@@ -1266,13 +1447,28 @@ class ParquetViewer(QMainWindow):
             return
             
         self.selection_visible = not self.selection_visible
+        brush = QBrush(QColor(230, 230, 230) if self.selection_visible else QColor(255, 255, 255))
+        
         for row, col in self.clipboard_cells:
             item = self.table.item(row, col)
             if item:
+                item.setBackground(brush)
+                # Add a distinctive border style
                 if self.selection_visible:
-                    item.setBackground(QColor(230, 230, 230))  # Light gray
+                    item.setData(Qt.UserRole, "copied")  # Mark as copied
                 else:
-                    item.setBackground(QColor(255, 255, 255))  # White
+                    item.setData(Qt.UserRole, None)  # Clear mark
+
+    def clear_copy_highlighting(self):
+        """Clear any copy/cut highlighting"""
+        if self.clipboard_cells:
+            for row, col in self.clipboard_cells:
+                item = self.table.item(row, col)
+                if item:
+                    item.setBackground(QBrush())  # Clear background
+                    item.setData(Qt.UserRole, None)  # Clear mark
+            self.clipboard_cells.clear()
+            self.selection_timer.stop()
 
     def cut_cells(self):
         """Cut selected cells"""
@@ -1286,7 +1482,7 @@ class ParquetViewer(QMainWindow):
                 old_value = self.original_df.iloc[row, col]
                 
                 # Create and push the edit command
-                command = EditCommand(row, col, old_value, None)
+                command = EditCommand([(row, col, old_value, None)])
                 self.command_stack.push(command)
                 
                 # Update DataFrame and UI
@@ -1312,31 +1508,29 @@ class ParquetViewer(QMainWindow):
         rows = sorted(set(item.row() for item in selected_items))
         cols = sorted(set(item.column() for item in selected_items))
         
-        # Create a list of lists to store the data
+        # Create a matrix to store the data
         data = []
-        current_row = []
-        last_row = -1
-        
-        # Store the cell coordinates and data
-        self.clipboard_cells = set()
-        for item in selected_items:
-            if item.row() != last_row:
-                if current_row:
-                    data.append(current_row)
-                current_row = []
-                last_row = item.row()
-            current_row.append(item.text())
-            self.clipboard_cells.add((item.row(), item.column()))
-        
-        if current_row:
-            data.append(current_row)
+        for row in rows:
+            row_data = []
+            for col in cols:
+                item = None
+                for selected_item in selected_items:
+                    if selected_item.row() == row and selected_item.column() == col:
+                        item = selected_item
+                        break
+                if item:
+                    row_data.append(item.text())
+                else:
+                    row_data.append('')
+            if row_data:  # Only add non-empty rows
+                data.append(row_data)
         
         # Store both text and structured data
-        text_to_copy = '\n'.join('\t'.join(row) for row in data)
+        text_to_copy = '\n'.join('\t'.join(str(cell) for cell in row) for row in data)
         self.clipboard_data = {
             'text': text_to_copy,
             'data': data,
-            'cells': self.clipboard_cells
+            'cells': set((item.row(), item.column()) for item in selected_items)
         }
         
         # Set system clipboard
@@ -1344,6 +1538,7 @@ class ParquetViewer(QMainWindow):
         
         # Start selection animation if not cutting
         if not cut:
+            self.clipboard_cells = self.clipboard_data['cells']
             self.selection_timer.start(500)  # Blink every 500ms
         else:
             self.selection_timer.stop()
@@ -1354,13 +1549,17 @@ class ParquetViewer(QMainWindow):
         if not self.edit_mode:
             return
             
-        # Get current cell
-        current_item = self.table.currentItem()
-        if not current_item:
-            return
-            
-        start_row = current_item.row()
-        start_col = current_item.column()
+        # Get selected cells or current cell
+        selected_ranges = self.table.selectedRanges()
+        if not selected_ranges:
+            current_item = self.table.currentItem()
+            if not current_item:
+                return
+            # Create a range for single cell
+            selected_ranges = [QTableWidgetSelectionRange(
+                current_item.row(), current_item.column(),
+                current_item.row(), current_item.column()
+            )]
         
         # Try to get structured data from our clipboard
         if self.clipboard_data and 'data' in self.clipboard_data:
@@ -1371,38 +1570,172 @@ class ParquetViewer(QMainWindow):
             if not clipboard_text:
                 return
             # Parse clipboard text (tab-separated values)
-            data = [row.split('\t') for row in clipboard_text.split('\n')]
+            data = [row.split('\t') for row in clipboard_text.strip().split('\n')]
         
-        # Paste data
-        for i, row_data in enumerate(data):
-            for j, value in enumerate(row_data):
-                row = start_row + i
-                col = start_col + j
+        # If single value and multiple cells selected, repeat the value
+        if len(data) == 1 and len(data[0]) == 1:
+            value = data[0][0]
+            changes = []
+            
+            for sel_range in selected_ranges:
+                for row in range(sel_range.topRow(), sel_range.bottomRow() + 1):
+                    for col in range(sel_range.leftColumn(), sel_range.rightColumn() + 1):
+                        if row >= self.table.rowCount() - 1 or col >= self.table.columnCount():  # Skip totals row
+                            continue
+                        
+                        try:
+                            # Get column type
+                            col_name = self.table.horizontalHeaderItem(col).text()
+                            dtype = self.column_types.get(col_name)
+                            
+                            # Convert value based on column type
+                            if dtype:
+                                if pd.isna(value) or value == '':
+                                    converted_value = None
+                                elif dtype == 'int64':
+                                    clean_value = value.replace(',', '')
+                                    converted_value = int(float(clean_value))
+                                elif dtype == 'float64':
+                                    clean_value = value.replace(',', '')
+                                    converted_value = float(clean_value)
+                                elif dtype == 'bool':
+                                    converted_value = bool(value.lower() in ['true', '1', 'yes'])
+                                elif dtype == 'datetime64[ns]':
+                                    converted_value = pd.to_datetime(value)
+                                else:
+                                    converted_value = str(value)
+                            else:
+                                converted_value = value
+                            
+                            old_value = self.original_df.iloc[row, col]
+                            changes.append((row, col, old_value, converted_value))
+                            
+                        except (ValueError, TypeError):
+                            continue  # Skip cells that can't be converted
+            
+            if changes:
+                # Create and push single command for all changes
+                command = EditCommand(changes)
+                self.command_stack.push(command)
                 
-                # Check if we're still within table bounds
-                if row >= self.table.rowCount() or col >= self.table.columnCount():
-                    continue
-                
-                item = self.table.item(row, col)
-                if item:
-                    old_value = self.original_df.iloc[row, col]
-                    
-                    # Create and push the edit command
-                    command = EditCommand(row, col, old_value, value)
-                    self.command_stack.push(command)
-                    
-                    # Update DataFrame and UI
+                # Apply all changes
+                for row, col, _, value in changes:
                     self.original_df.iloc[row, col] = value
-                    item.setText(value)
-                    
-                    # Mark as modified
-                    self.modified = True
+                    item = self.table.item(row, col)
+                    if item:
+                        if pd.notna(value):
+                            if isinstance(value, (int, float)):
+                                item.setText(f"{value:,}")
+                                item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                            else:
+                                item.setText(str(value))
+                        else:
+                            item.setText('')
                     self.modified_cells.add((row, col))
+                
+                self.modified = True
+                self.save_action.setEnabled(True)
+                self.update_undo_redo_state()
+                self.update_status_bar()
+                self.update_column_totals()
+        else:
+            # Normal paste operation for multiple values
+            changes = []
+            for sel_range in selected_ranges:
+                start_row = sel_range.topRow()
+                start_col = sel_range.leftColumn()
+                
+                for i, row_data in enumerate(data):
+                    for j, value in enumerate(row_data):
+                        row = start_row + i
+                        col = start_col + j
+                        
+                        if row >= self.table.rowCount() - 1 or col >= self.table.columnCount():  # Skip totals row
+                            continue
+                        
+                        try:
+                            # Get column type
+                            col_name = self.table.horizontalHeaderItem(col).text()
+                            dtype = self.column_types.get(col_name)
+                            
+                            # Convert value based on column type
+                            if dtype:
+                                if pd.isna(value) or value == '':
+                                    converted_value = None
+                                elif dtype == 'int64':
+                                    clean_value = value.replace(',', '')
+                                    converted_value = int(float(clean_value))
+                                elif dtype == 'float64':
+                                    clean_value = value.replace(',', '')
+                                    converted_value = float(clean_value)
+                                elif dtype == 'bool':
+                                    converted_value = bool(value.lower() in ['true', '1', 'yes'])
+                                elif dtype == 'datetime64[ns]':
+                                    converted_value = pd.to_datetime(value)
+                                else:
+                                    converted_value = str(value)
+                            else:
+                                converted_value = value
+                            
+                            old_value = self.original_df.iloc[row, col]
+                            changes.append((row, col, old_value, converted_value))
+                            
+                        except (ValueError, TypeError):
+                            continue  # Skip cells that can't be converted
+            
+            if changes:
+                # Create and push single command for all changes
+                command = EditCommand(changes)
+                self.command_stack.push(command)
+                
+                # Apply all changes
+                for row, col, _, value in changes:
+                    self.original_df.iloc[row, col] = value
+                    item = self.table.item(row, col)
+                    if item:
+                        if pd.notna(value):
+                            if isinstance(value, (int, float)):
+                                item.setText(f"{value:,}")
+                                item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                            else:
+                                item.setText(str(value))
+                        else:
+                            item.setText('')
+                    self.modified_cells.add((row, col))
+                
+                self.modified = True
+                self.save_action.setEnabled(True)
+                self.update_undo_redo_state()
+                self.update_status_bar()
+                self.update_column_totals()
+
+    def calculate_selection_stats(self):
+        """Calculate statistics for the selected cells"""
+        selected_ranges = self.table.selectedRanges()
+        if not selected_ranges:
+            self.stats_bar.update_stats()
+            return
+            
+        numeric_values = []
+        for range_ in selected_ranges:
+            for row in range(range_.topRow(), range_.bottomRow() + 1):
+                for col in range(range_.leftColumn(), range_.rightColumn() + 1):
+                    item = self.table.item(row, col)
+                    if item:
+                        try:
+                            value = float(item.text().replace(',', ''))
+                            numeric_values.append(value)
+                        except (ValueError, TypeError):
+                            continue
         
-        # Update UI state
-        self.save_action.setEnabled(True)
-        self.update_undo_redo_state()
-        self.update_status_bar()
+        count = len(numeric_values)
+        if count == 0:
+            self.stats_bar.update_stats((count, None, None))
+            return
+            
+        sum_val = sum(numeric_values)
+        avg = sum_val / count
+        self.stats_bar.update_stats((count, sum_val, avg))
 
 def main():
     app = QApplication(sys.argv)
