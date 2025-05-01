@@ -85,6 +85,12 @@ class ParquetViewer(QMainWindow):
         self.dark_mode_action.triggered.connect(self.toggle_dark_mode)
         settings_menu.addAction(self.dark_mode_action)
         
+        # Wrap text action
+        self.wrap_text_action = QAction("Wrap Text", self)
+        self.wrap_text_action.setCheckable(True)
+        self.wrap_text_action.triggered.connect(self.toggle_wrap_text)
+        settings_menu.addAction(self.wrap_text_action)
+        
         # Reset view action
         reset_view_action = QAction("Reset View", self)
         reset_view_action.triggered.connect(self.reset_view)
@@ -95,12 +101,14 @@ class ParquetViewer(QMainWindow):
         if os.path.exists(self.config_file):
             self.config.read(self.config_file)
             self.dark_mode = self.config.getboolean('Settings', 'dark_mode', fallback=False)
+            self.wrap_text = self.config.getboolean('Settings', 'wrap_text', fallback=False)
             self.last_folder = self.config.get('Settings', 'last_folder', fallback=os.path.join(os.path.expanduser('~'), 'Documents'))
             # Load recent files
             self.recent_files = self.config.get('Settings', 'recent_files', fallback='').split('|')
             self.recent_files = [f for f in self.recent_files if f and os.path.exists(f)]  # Filter empty and non-existent files
         else:
             self.dark_mode = False
+            self.wrap_text = False
             self.last_folder = os.path.join(os.path.expanduser('~'), 'Documents')
             self.recent_files = []
             self.save_settings()
@@ -108,15 +116,18 @@ class ParquetViewer(QMainWindow):
         # Update recent files menu
         self.update_recent_files_menu()
         
-        # Sync the menu toggle state with the loaded setting
+        # Sync the menu toggle states with the loaded settings
         if hasattr(self, 'dark_mode_action'):
             self.dark_mode_action.setChecked(self.dark_mode)
+        if hasattr(self, 'wrap_text_action'):
+            self.wrap_text_action.setChecked(self.wrap_text)
 
     def save_settings(self):
         """Save current settings to config file"""
         if not self.config.has_section('Settings'):
             self.config.add_section('Settings')
         self.config.set('Settings', 'dark_mode', str(self.dark_mode))
+        self.config.set('Settings', 'wrap_text', str(self.wrap_text))
         self.config.set('Settings', 'last_folder', self.last_folder)
         # Save recent files
         self.config.set('Settings', 'recent_files', '|'.join(self.recent_files))
@@ -129,6 +140,12 @@ class ParquetViewer(QMainWindow):
         self.apply_theme()
         self.save_settings()  # Save settings when dark mode is toggled
     
+    def toggle_wrap_text(self):
+        """Toggle text wrapping for table cells"""
+        self.wrap_text = self.wrap_text_action.isChecked()
+        self.save_settings()
+        self.update_table_wrapping()
+
     def show_context_menu(self, position):
         """Show context menu for copying cell contents"""
         menu = QMenu()
@@ -399,13 +416,29 @@ class ParquetViewer(QMainWindow):
                 for j in range(len(df.columns)):
                     item = QTableWidgetItem(str(df.iloc[i, j]))
                     item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+                    if self.wrap_text:
+                        item.setTextAlignment(Qt.AlignLeft | Qt.AlignTop)
+                        item.setFlags(item.flags() | Qt.TextWordWrap)
+                    else:
+                        item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+                        item.setFlags(item.flags() & ~Qt.TextWordWrap)
                     self.table.setItem(i, j, item)
-            
-            # Adjust column widths
-            self.adjust_all_columns()
             
             # Enable sorting after data is loaded
             self.table.setSortingEnabled(True)
+            
+            # First adjust column widths
+            self.adjust_all_columns()
+            
+            # Then set appropriate row heights based on wrap setting and adjusted columns
+            if self.wrap_text:
+                # Process events to ensure column adjustments are applied
+                QApplication.processEvents()
+                self.table.resizeRowsToContents()
+            else:
+                header_height = self.table.horizontalHeader().height()
+                for row in range(self.table.rowCount()):
+                    self.table.setRowHeight(row, header_height)
             
             # Add to recent files
             self.add_to_recent_files(file_name)
@@ -535,6 +568,9 @@ class ParquetViewer(QMainWindow):
         super().resizeEvent(event)
         # Update column widths when window is resized
         self.adjust_all_columns()
+        # Update row heights if text wrapping is enabled
+        if self.wrap_text:
+            self.table.resizeRowsToContents()
 
     def adjust_all_columns(self):
         """Adjust all column widths based on content and window size"""
@@ -601,6 +637,31 @@ class ParquetViewer(QMainWindow):
         
         # Add padding and ensure minimum width
         return max(optimal_width + padding, min_width)
+
+    def update_table_wrapping(self):
+        """Update text wrapping for all cells in the table"""
+        for row in range(self.table.rowCount()):
+            for col in range(self.table.columnCount()):
+                item = self.table.item(row, col)
+                if item:
+                    if self.wrap_text:
+                        item.setTextAlignment(Qt.AlignLeft | Qt.AlignTop)
+                        item.setFlags(item.flags() | Qt.TextWordWrap)
+                    else:
+                        item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+                        item.setFlags(item.flags() & ~Qt.TextWordWrap)
+        
+        # Update row heights based on wrap setting
+        if self.wrap_text:
+            self.table.resizeRowsToContents()
+        else:
+            # Reset all rows to default height when disabling wrap
+            header_height = self.table.horizontalHeader().height()
+            for row in range(self.table.rowCount()):
+                self.table.setRowHeight(row, header_height)
+        
+        # Adjust columns to ensure proper layout
+        self.adjust_all_columns()
 
 def main():
     app = QApplication(sys.argv)
