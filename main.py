@@ -91,39 +91,6 @@ class CommandStack:
         self.undo_stack.clear()
         self.redo_stack.clear()
 
-class StatsBar(QFrame):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setFrameStyle(QFrame.Panel | QFrame.Sunken)
-        
-        # Create layout
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(5, 2, 5, 2)
-        
-        # Create labels for statistics
-        self.stats_label = QLabel()
-        self.stats_label.setTextFormat(Qt.RichText)
-        layout.addWidget(self.stats_label)
-        
-        # Set fixed height
-        self.setFixedHeight(25)
-        
-    def update_stats(self, selection_stats=None):
-        if not selection_stats:
-            self.stats_label.setText("")
-            return
-            
-        count, sum_val, avg = selection_stats
-        stats_text = f"Count: {count:,}"
-        
-        if sum_val is not None:
-            stats_text += f" | Sum: {sum_val:,.2f}"
-        
-        if avg is not None:
-            stats_text += f" | Average: {avg:,.2f}"
-            
-        self.stats_label.setText(stats_text)
-
 class ParquetViewer(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -158,11 +125,20 @@ class ParquetViewer(QMainWindow):
         # Create status bar
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
+        
+        # Create labels for status bar
+        self.stats_label = QLabel()  # New label for stats
+        self.stats_label.setTextFormat(Qt.RichText) # Use rich text
         self.edit_mode_label = QLabel()
         self.modified_label = QLabel()
+        
+        # Add widgets to status bar using addPermanentWidget (adds right-to-left)
+        # Order: Stats, Edit Mode, Modified (to get desired left-to-right display)
+        self.status_bar.addPermanentWidget(self.stats_label)
         self.status_bar.addPermanentWidget(self.edit_mode_label)
         self.status_bar.addPermanentWidget(self.modified_label)
-        self.update_status_bar()
+        
+        self.update_status_bar() # Initial update triggers text formatting
         
         # Load settings after menu creation
         self.load_settings()
@@ -179,6 +155,7 @@ class ParquetViewer(QMainWindow):
         self.table.customContextMenuRequested.connect(self.show_context_menu)
         self.table.setSelectionMode(QTableWidget.ExtendedSelection)
         self.table.itemChanged.connect(self.on_cell_changed)
+        self.table.itemSelectionChanged.connect(self.calculate_selection_stats) # Connect selection change to stats update
         
         # Configure headers for right-click menu
         header = self.table.horizontalHeader()
@@ -217,10 +194,6 @@ class ParquetViewer(QMainWindow):
         table_layout.addWidget(self.totals_widget)
         
         layout.addWidget(table_container)
-        
-        # Add stats bar
-        self.stats_bar = StatsBar()
-        layout.addWidget(self.stats_bar)
         
         # Store filter values
         self.filters = {}
@@ -590,23 +563,45 @@ class ParquetViewer(QMainWindow):
                 item.setText('')
 
     def update_status_bar(self):
-        """Update status bar with current state"""
-        # Update edit mode status
-        self.edit_mode_label.setText("Edit Mode: ON" if self.edit_mode else "Edit Mode: OFF")
+        """Update status bar with current state and consistent separators"""
+        separator = "  |  " # Define the separator
         
-        # Update modified status
+        # 1. Get Stats Text (already set by calculate_selection_stats)
+        stats_text = self.stats_label.text()
+        
+        # 2. Set Edit Mode Text
+        edit_mode_raw_text = "Edit Mode: ON" if self.edit_mode else "Edit Mode: OFF"
+        # Add separator if stats_text exists
+        edit_mode_display_text = separator + edit_mode_raw_text if stats_text else edit_mode_raw_text
+        self.edit_mode_label.setText(edit_mode_display_text)
+            
+        # 3. Set Modified Text
+        modified_raw_text = "Modified" if self.modified else ""
+        # Need to check if the edit_mode_label *actually has text* before adding separator
+        current_edit_mode_text = self.edit_mode_label.text() 
+        
+        # Add separator only if edit mode label has text AND modified status is true
+        if current_edit_mode_text and self.modified:
+            modified_display_text = separator + modified_raw_text
+        else:
+            modified_display_text = modified_raw_text # Show only "Modified" or nothing
+            
+        self.modified_label.setText(modified_display_text)
+
+        # Apply style for modified text
         if self.modified:
-            self.modified_label.setText("Modified")
             self.modified_label.setStyleSheet("color: red;")
         else:
-            self.modified_label.setText("")
             self.modified_label.setStyleSheet("")
-            
-        # Update window title to show modified state
+
+        # 4. Update window title
+        title_prefix = "*" if self.modified else ""
+        file_display_name = os.path.basename(self.current_file) if self.current_file else "Untitled"
         if self.current_file:
-            base_name = os.path.basename(self.current_file)
-            name_without_ext = os.path.splitext(base_name)[0]
-            self.setWindowTitle(f"{'*' if self.modified else ''}{name_without_ext} - Parquet File Viewer")
+            name_without_ext = os.path.splitext(file_display_name)[0]
+            self.setWindowTitle(f"{title_prefix}{name_without_ext} - Parquet File Viewer")
+        else:
+            self.setWindowTitle(f"{title_prefix}Untitled - Parquet File Viewer")
 
     def save_file(self):
         """Save the current file"""
@@ -1455,10 +1450,6 @@ class ParquetViewer(QMainWindow):
                 self.table.editItem(self.table.currentItem())
                 return True
                 
-        elif source == self.table and event.type() == event.MouseButtonRelease:
-            # Update statistics when selection changes
-            self.calculate_selection_stats()
-                
         return super().eventFilter(source, event)
 
     def delete_selected_cell_contents(self):
@@ -1989,10 +1980,10 @@ class ParquetViewer(QMainWindow):
                 self.update_column_totals()
 
     def calculate_selection_stats(self):
-        """Calculate statistics for the selected cells"""
+        """Calculate statistics for the selected cells and update the status bar label"""
         selected_ranges = self.table.selectedRanges()
         if not selected_ranges:
-            self.stats_bar.update_stats()
+            self.stats_label.setText("") # Clear the label
             return
             
         total_cells = 0
@@ -2005,19 +1996,24 @@ class ParquetViewer(QMainWindow):
                     item = self.table.item(row, col)
                     if item:
                         try:
+                            # Attempt to convert cell text to float, removing commas
                             value = float(item.text().replace(',', ''))
                             numeric_values.append(value)
                         except (ValueError, TypeError):
+                            # Ignore non-numeric cells for sum/average
                             continue
         
-        count = total_cells
-        if len(numeric_values) == 0:
-            self.stats_bar.update_stats((count, None, None))
-            return
+        # Format the statistics string
+        stats_text = f"Count: {total_cells:,}"
+        
+        if numeric_values: # Only show sum/avg if there are numeric values
+            sum_val = sum(numeric_values)
+            avg = sum_val / len(numeric_values)
+            stats_text += f" | Sum: {sum_val:,.2f}"
+            stats_text += f" | Average: {avg:,.2f}"
             
-        sum_val = sum(numeric_values)
-        avg = sum_val / len(numeric_values)
-        self.stats_bar.update_stats((count, sum_val, avg))
+        # Update the status bar label
+        self.stats_label.setText(stats_text)
 
     def check_unsaved_changes(self):
         """Check for unsaved changes and handle them
