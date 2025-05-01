@@ -1078,6 +1078,11 @@ class ParquetViewer(QMainWindow):
                             item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                         else:
                             item.setText(str(val))
+                    # Ensure item editability matches current edit mode
+                    if self.edit_mode:
+                        item.setFlags(item.flags() | Qt.ItemIsEditable)
+                    else:
+                        item.setFlags(item.flags() & ~Qt.ItemIsEditable)
                     self.table.setItem(j, i, item)
             
             # Update window title
@@ -1396,26 +1401,11 @@ class ParquetViewer(QMainWindow):
                     )
                 return True
                 
-            elif key in (Qt.Key_Return, Qt.Key_Enter):
-                current = self.table.currentItem()
-                if not current:
-                    return False
-                    
-                # If cell is already in edit mode, let it handle the event
-                if self.table.state() == QTableWidget.EditingState:
-                    return False
-                    
-                # If not in edit mode, start editing
-                if not self.edit_mode:
-                    self.edit_mode_action.trigger()
-                self.table.editItem(current)
-                return True
-                
             elif key == Qt.Key_F2:
                 current = self.table.currentItem()
                 if current and self.edit_mode:
                     self.table.editItem(current)
-                    return True
+                    return True # Consume the event, F2 edit works differently
                 
             elif key in (Qt.Key_Delete, Qt.Key_Backspace):
                 if not self.edit_mode:
@@ -2224,6 +2214,13 @@ class ParquetViewer(QMainWindow):
                         item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                     else:
                         item.setText(str(default_value))
+                
+                # Ensure item editability matches current edit mode
+                if self.edit_mode:
+                    item.setFlags(item.flags() | Qt.ItemIsEditable)
+                else:
+                    item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+                    
                 self.table.setItem(row, col_idx, item)
             
             # Update modified state
