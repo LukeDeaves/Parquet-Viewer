@@ -65,8 +65,10 @@ class ParquetViewer(QMainWindow):
         if os.path.exists(self.config_file):
             self.config.read(self.config_file)
             self.dark_mode = self.config.getboolean('Settings', 'dark_mode', fallback=False)
+            self.last_folder = self.config.get('Settings', 'last_folder', fallback=os.path.join(os.path.expanduser('~'), 'Documents'))
         else:
             self.dark_mode = False
+            self.last_folder = os.path.join(os.path.expanduser('~'), 'Documents')
             self.save_settings()
         
         # Sync the menu toggle state with the loaded setting
@@ -78,6 +80,7 @@ class ParquetViewer(QMainWindow):
         if not self.config.has_section('Settings'):
             self.config.add_section('Settings')
         self.config.set('Settings', 'dark_mode', str(self.dark_mode))
+        self.config.set('Settings', 'last_folder', self.last_folder)
         
         with open(self.config_file, 'w') as f:
             self.config.write(f)
@@ -205,14 +208,22 @@ class ParquetViewer(QMainWindow):
                 QApplication.clipboard().setText(text_to_copy)
 
     def open_file(self):
+        # Check if last folder exists, if not use Documents
+        if not os.path.exists(self.last_folder):
+            self.last_folder = os.path.join(os.path.expanduser('~'), 'Documents')
+            
         file_name, _ = QFileDialog.getOpenFileName(
             self,
             "Open Parquet File",
-            "",
+            self.last_folder,
             "Parquet Files (*.parquet);;All Files (*)"
         )
         
         if file_name:
+            # Update last folder to the directory of the opened file
+            self.last_folder = os.path.dirname(file_name)
+            self.save_settings()  # Save the new last folder
+            
             try:
                 # Read the parquet file
                 df = pd.read_parquet(file_name)
