@@ -5,7 +5,7 @@ import pandas as pd
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                             QPushButton, QFileDialog, QTableWidget, QTableWidgetItem,
                             QMenuBar, QMenu, QAction, QMessageBox, QFrame, QDialog, QLineEdit, QDialogButtonBox,
-                            QLabel, QStatusBar, QTableWidgetSelectionRange, QComboBox)
+                            QLabel, QStatusBar, QTableWidgetSelectionRange, QComboBox, QScrollBar)
 from PyQt5.QtCore import Qt, QPoint, QTimer
 from PyQt5.QtGui import QPalette, QColor, QCursor, QBrush
 import configparser
@@ -185,6 +185,7 @@ class ParquetViewer(QMainWindow):
         header.customContextMenuRequested.connect(self.show_filter_menu)
         header.setSectionsClickable(True)
         header.sectionResized.connect(self.on_column_resize)
+        header.sectionClicked.connect(self.on_header_click)
         
         # Configure vertical header (row numbers) for right-click menu
         v_header = self.table.verticalHeader()
@@ -198,10 +199,8 @@ class ParquetViewer(QMainWindow):
         self.totals_widget.verticalHeader().hide()
         self.totals_widget.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.totals_widget.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        
-        # Connect horizontal scrollbars
-        self.table.horizontalScrollBar().valueChanged.connect(self.totals_widget.horizontalScrollBar().setValue)
-        self.totals_widget.horizontalScrollBar().valueChanged.connect(self.table.horizontalScrollBar().setValue)
+        self.totals_widget.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.totals_widget.customContextMenuRequested.connect(self.show_totals_context_menu)
         
         # Create a container widget for the table and totals
         table_container = QWidget()
@@ -209,6 +208,11 @@ class ParquetViewer(QMainWindow):
         table_layout.setContentsMargins(0, 0, 0, 0)
         table_layout.setSpacing(0)
         table_layout.addWidget(self.table)
+        # Add scrollbar between table and totals
+        h_scrollbar = QScrollBar(Qt.Horizontal)
+        self.table.setHorizontalScrollBar(h_scrollbar)
+        self.totals_widget.setHorizontalScrollBar(h_scrollbar)
+        table_layout.addWidget(h_scrollbar)
         table_layout.addWidget(self.totals_widget)
         
         layout.addWidget(table_container)
@@ -312,8 +316,12 @@ class ParquetViewer(QMainWindow):
         edit_menu.addAction(self.copy_action)
         edit_menu.addAction(self.paste_action)
         
-        # Add Column action
+        # Add Row/Column actions
         edit_menu.addSeparator()
+        add_row_action = QAction("Add Row", self)
+        add_row_action.triggered.connect(lambda: self.insert_row(self.table.rowCount()))
+        edit_menu.addAction(add_row_action)
+        
         add_column_action = QAction("Add Column...", self)
         add_column_action.triggered.connect(self.add_new_column)
         edit_menu.addAction(add_column_action)
@@ -476,6 +484,12 @@ class ParquetViewer(QMainWindow):
             # Store the old value before making changes
             old_value = self.original_df.iloc[row, col]
             
+            # Skip if the value hasn't actually changed
+            if pd.isna(new_value) and pd.isna(old_value):
+                return
+            elif str(old_value).strip() == new_value:
+                return
+            
             if dtype:
                 # Validate and convert the new value
                 if pd.isna(new_value) or new_value == '':
@@ -494,6 +508,12 @@ class ParquetViewer(QMainWindow):
                     converted_value = pd.to_datetime(new_value)
                 else:
                     converted_value = str(new_value)
+                
+                # Skip if the converted value hasn't changed
+                if pd.isna(converted_value) and pd.isna(old_value):
+                    return
+                elif converted_value == old_value:
+                    return
                 
                 # Create and push the edit command
                 command = EditCommand([(row, col, old_value, converted_value)])
@@ -528,6 +548,10 @@ class ParquetViewer(QMainWindow):
                 self.update_column_totals()
                 
             else:
+                # Skip if the string value hasn't changed
+                if new_value == str(old_value).strip():
+                    return
+                
                 # If no dtype found, treat as string
                 command = EditCommand([(row, col, old_value, new_value)])
                 self.command_stack.push(command)
@@ -711,12 +735,20 @@ class ParquetViewer(QMainWindow):
             min_width = max(int(self.get_min_column_width(logical_index)), 50)
             
             if new_size > max_width:
-                self.table.horizontalHeader().resizeSection(logical_index, max_width)
+                new_size = max_width
+                self.table.horizontalHeader().resizeSection(logical_index, new_size)
             elif new_size < min_width:
-                self.table.horizontalHeader().resizeSection(logical_index, min_width)
+                new_size = min_width
+                self.table.horizontalHeader().resizeSection(logical_index, new_size)
+            
+            # Update totals column width
+            self.totals_widget.setColumnWidth(logical_index, new_size)
+            
         except Exception:
             # If resize fails, set to minimum width
-            self.table.horizontalHeader().resizeSection(logical_index, 50)
+            new_size = 50
+            self.table.horizontalHeader().resizeSection(logical_index, new_size)
+            self.totals_widget.setColumnWidth(logical_index, new_size)
 
     def get_max_column_width(self):
         """Get maximum allowed column width (50% of table width)"""
@@ -778,20 +810,38 @@ class ParquetViewer(QMainWindow):
         header = self.table.horizontalHeader()
         column = header.logicalIndexAt(pos)
         
+        # If clicked beyond the last column, show add column menu
+        if column == -1:
+            menu = QMenu()
+            add_column_action = menu.addAction("Add Column")
+            action = menu.exec_(header.mapToGlobal(pos))
+            if action == add_column_action:
+                self.add_new_column()
+            return
+        
         menu = QMenu()
+        
+        # Add column operations
+        insert_left_action = menu.addAction("Insert Column Left")
+        insert_right_action = menu.addAction("Insert Column Right")
+        menu.addSeparator()
+        delete_column_action = menu.addAction("Delete Column")
+        delete_column_action.setEnabled(self.edit_mode)
+        
+        menu.addSeparator()
+        
+        # Add sort options
+        sort_asc_action = menu.addAction("Sort A to Z")
+        sort_desc_action = menu.addAction("Sort Z to A")
+        clear_sort_action = menu.addAction("Clear Sort")
+        
+        menu.addSeparator()
         
         # Add filter options
         filter_action = menu.addAction("Filter...")
         clear_action = menu.addAction("Clear Filter")
-        clear_sort_column_action = menu.addAction("Clear Sorting")
         menu.addSeparator()
         clear_all_filters_action = menu.addAction("Clear All Filters")
-        clear_all_sort_action = menu.addAction("Clear All Sorting")
-        
-        # Add delete column option
-        menu.addSeparator()
-        delete_column_action = menu.addAction("Delete Column")
-        delete_column_action.setEnabled(self.edit_mode)
         
         # Show current filter if exists
         current_filter = self.filters.get(column)
@@ -804,46 +854,92 @@ class ParquetViewer(QMainWindow):
         
         action = menu.exec_(pos)
         
-        if action == filter_action:
-            # Show filter dialog
-            dialog = QDialog(self)
-            dialog.setWindowFlags(dialog.windowFlags() & ~Qt.WindowContextHelpButtonHint)
-            dialog.setWindowTitle(f"Filter Column: {self.table.horizontalHeaderItem(column).text().replace(' 🔍', '')}")
-            layout = QVBoxLayout(dialog)
-            
-            # Add filter input
-            filter_input = QLineEdit()
-            if current_filter:
-                filter_input.setText(current_filter)
-            layout.addWidget(filter_input)
-            
-            # Add buttons
-            buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-            buttons.accepted.connect(dialog.accept)
-            buttons.rejected.connect(dialog.reject)
-            layout.addWidget(buttons)
-            
-            if dialog.exec_() == QDialog.Accepted:
-                filter_text = filter_input.text()
-                if filter_text:
-                    self.filters[column] = filter_text
-                else:
-                    self.filters.pop(column, None)
-                self.apply_filters()
-                self.update_header_style()
-                
+        if action == insert_left_action:
+            self.add_new_column(column)
+        elif action == insert_right_action:
+            self.add_new_column(column + 1)
+        elif action == delete_column_action:
+            self.delete_column(column)
+        elif action == sort_asc_action:
+            self.table.sortItems(column, Qt.AscendingOrder)
+        elif action == sort_desc_action:
+            self.table.sortItems(column, Qt.DescendingOrder)
+        elif action == clear_sort_action:
+            self.clear_column_sort(column)
+        elif action == filter_action:
+            self.show_filter_dialog(column)
         elif action == clear_action:
             self.filters.pop(column, None)
             self.apply_filters()
             self.update_header_style()
-        elif action == clear_sort_column_action:
-            self.clear_column_sort(column)
         elif action == clear_all_filters_action:
             self.clear_all_filters()
-        elif action == clear_all_sort_action:
-            self.clear_sorting()
-        elif action == delete_column_action:
-            self.delete_column(column)
+
+    def show_row_menu(self, pos):
+        """Show context menu for row operations"""
+        if not self.edit_mode:
+            return
+            
+        v_header = self.table.verticalHeader()
+        row = v_header.logicalIndexAt(pos)
+        
+        # If clicked beyond the last row, show add row menu
+        if row == -1:
+            menu = QMenu()
+            add_row_action = menu.addAction("Add Row")
+            action = menu.exec_(v_header.mapToGlobal(pos))
+            if action == add_row_action:
+                self.insert_row(self.table.rowCount())
+            return
+        
+        menu = QMenu()
+        
+        # Add row options
+        insert_above_action = menu.addAction("Insert Row Above")
+        insert_below_action = menu.addAction("Insert Row Below")
+        menu.addSeparator()
+        delete_row_action = menu.addAction("Delete Row")
+        
+        # Calculate menu position
+        pos = v_header.mapToGlobal(pos)
+        
+        action = menu.exec_(pos)
+        
+        if action == insert_above_action:
+            self.insert_row(row)
+        elif action == insert_below_action:
+            self.insert_row(row + 1)
+        elif action == delete_row_action:
+            self.delete_row(row)
+
+    def show_filter_dialog(self, column):
+        """Show filter dialog for a column"""
+        dialog = QDialog(self)
+        dialog.setWindowFlags(dialog.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+        dialog.setWindowTitle(f"Filter Column: {self.table.horizontalHeaderItem(column).text().replace(' 🔍', '')}")
+        layout = QVBoxLayout(dialog)
+        
+        # Add filter input
+        filter_input = QLineEdit()
+        current_filter = self.filters.get(column)
+        if current_filter:
+            filter_input.setText(current_filter)
+        layout.addWidget(filter_input)
+        
+        # Add buttons
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        
+        if dialog.exec_() == QDialog.Accepted:
+            filter_text = filter_input.text()
+            if filter_text:
+                self.filters[column] = filter_text
+            else:
+                self.filters.pop(column, None)
+            self.apply_filters()
+            self.update_header_style()
 
     def update_header_style(self):
         """Update header style to show filtered columns"""
@@ -1315,9 +1411,11 @@ class ParquetViewer(QMainWindow):
             final_width = int(min(max(optimal_width, min_width), max_column_width))
             try:
                 self.table.setColumnWidth(col, final_width)
+                self.totals_widget.setColumnWidth(col, final_width)
             except Exception:
                 # If setting width fails, set to minimum width
                 self.table.setColumnWidth(col, min_column_width)
+                self.totals_widget.setColumnWidth(col, min_column_width)
 
     def get_optimal_column_width(self, column):
         """Calculate optimal width based on content and header"""
@@ -1825,34 +1923,6 @@ class ParquetViewer(QMainWindow):
             # Update column totals
             self.update_column_totals()
 
-    def show_row_menu(self, pos):
-        """Show context menu for row operations"""
-        if not self.edit_mode:
-            return
-            
-        v_header = self.table.verticalHeader()
-        row = v_header.logicalIndexAt(pos)
-        
-        menu = QMenu()
-        
-        # Add row options
-        insert_above_action = menu.addAction("Insert Row Above")
-        insert_below_action = menu.addAction("Insert Row Below")
-        menu.addSeparator()
-        delete_row_action = menu.addAction("Delete Row")
-        
-        # Calculate menu position
-        pos = v_header.mapToGlobal(pos)
-        
-        action = menu.exec_(pos)
-        
-        if action == insert_above_action:
-            self.insert_row(row)
-        elif action == insert_below_action:
-            self.insert_row(row + 1)
-        elif action == delete_row_action:
-            self.delete_row(row)
-
     def insert_row(self, row_index):
         """Insert a new row at the specified index"""
         if not self.edit_mode:
@@ -1909,7 +1979,7 @@ class ParquetViewer(QMainWindow):
             # Update column totals
             self.update_column_totals()
 
-    def add_new_column(self):
+    def add_new_column(self, position=None):
         """Add a new column to the table and DataFrame"""
         if not self.edit_mode:
             return
@@ -2048,6 +2118,47 @@ class ParquetViewer(QMainWindow):
         
         # Add initial column
         self.add_new_column()
+
+    def show_totals_context_menu(self, position):
+        """Show context menu for totals row"""
+        menu = QMenu()
+        copy_action = menu.addAction("Copy")
+        
+        action = menu.exec_(self.totals_widget.viewport().mapToGlobal(position))
+        
+        if action == copy_action:
+            self.copy_totals()
+
+    def copy_totals(self):
+        """Copy selected cells from totals row"""
+        selected_items = self.totals_widget.selectedItems()
+        if not selected_items:
+            return
+            
+        # Create a list to store the data
+        data = []
+        current_row = []
+        
+        for item in selected_items:
+            current_row.append(item.text())
+        
+        if current_row:
+            data.append(current_row)
+        
+        # Convert to tab-separated string
+        text_to_copy = '\n'.join('\t'.join(row) for row in data)
+        QApplication.clipboard().setText(text_to_copy)
+
+    def on_header_click(self, logical_index):
+        """Handle column header click to select entire column"""
+        # Select the entire column
+        self.table.setRangeSelected(
+            QTableWidgetSelectionRange(
+                0, logical_index,
+                self.table.rowCount() - 1, logical_index
+            ),
+            True
+        )
 
 def main():
     app = QApplication(sys.argv)
