@@ -2,7 +2,8 @@ import sys
 import os
 import pandas as pd
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
-                            QPushButton, QFileDialog, QTableWidget, QTableWidgetItem)
+                            QPushButton, QFileDialog, QTableWidget, QTableWidgetItem,
+                            QMenuBar, QMenu, QAction)
 from PyQt5.QtCore import Qt
 
 class ParquetViewer(QMainWindow):
@@ -10,6 +11,10 @@ class ParquetViewer(QMainWindow):
         super().__init__()
         self.setWindowTitle("Parquet File Viewer")
         self.setGeometry(100, 100, 800, 600)
+        self.dark_mode = False
+        
+        # Create menu bar
+        self.create_menu_bar()
         
         # Create central widget and layout
         central_widget = QWidget()
@@ -24,6 +29,81 @@ class ParquetViewer(QMainWindow):
         # Create table widget to display data
         self.table = QTableWidget()
         layout.addWidget(self.table)
+        
+        # Apply initial theme
+        self.apply_theme()
+        
+    def create_menu_bar(self):
+        menubar = self.menuBar()
+        
+        # Settings menu
+        settings_menu = menubar.addMenu("Settings")
+        
+        # Dark mode action
+        self.dark_mode_action = QAction("Dark Mode", self)
+        self.dark_mode_action.setCheckable(True)
+        self.dark_mode_action.triggered.connect(self.toggle_dark_mode)
+        settings_menu.addAction(self.dark_mode_action)
+    
+    def toggle_dark_mode(self):
+        self.dark_mode = self.dark_mode_action.isChecked()
+        self.apply_theme()
+    
+    def apply_theme(self):
+        if self.dark_mode:
+            self.setStyleSheet("""
+                QMainWindow {
+                    background-color: #2b2b2b;
+                    color: #ffffff;
+                }
+                QTableWidget {
+                    background-color: #2b2b2b;
+                    color: #ffffff;
+                    gridline-color: #444444;
+                    border: 1px solid #444444;
+                }
+                QTableWidget::item {
+                    background-color: #2b2b2b;
+                    color: #ffffff;
+                }
+                QTableWidget::item:selected {
+                    background-color: #3b3b3b;
+                }
+                QHeaderView::section {
+                    background-color: #3b3b3b;
+                    color: #ffffff;
+                    border: 1px solid #444444;
+                }
+                QPushButton {
+                    background-color: #3b3b3b;
+                    color: #ffffff;
+                    border: 1px solid #444444;
+                    padding: 5px;
+                }
+                QPushButton:hover {
+                    background-color: #4b4b4b;
+                }
+                QMenuBar {
+                    background-color: #2b2b2b;
+                    color: #ffffff;
+                }
+                QMenuBar::item {
+                    background-color: #2b2b2b;
+                    color: #ffffff;
+                }
+                QMenuBar::item:selected {
+                    background-color: #3b3b3b;
+                }
+                QMenu {
+                    background-color: #2b2b2b;
+                    color: #ffffff;
+                }
+                QMenu::item:selected {
+                    background-color: #3b3b3b;
+                }
+            """)
+        else:
+            self.setStyleSheet("")  # Reset to default light theme
         
     def open_file(self):
         file_name, _ = QFileDialog.getOpenFileName(
@@ -68,4 +148,4 @@ def main():
     sys.exit(app.exec_())
 
 if __name__ == "__main__":
-    main() 
+    main()
