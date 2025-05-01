@@ -18,6 +18,7 @@ class ParquetViewer(QMainWindow):
         super().__init__()
         self.setWindowTitle("Parquet File Viewer")
         self.setGeometry(100, 100, 800, 600)
+        self.setMinimumWidth(400)  # Set minimum window width
         
         # Initialize config
         self.config = configparser.ConfigParser()
@@ -49,6 +50,10 @@ class ParquetViewer(QMainWindow):
         header.setContextMenuPolicy(Qt.CustomContextMenu)
         header.customContextMenuRequested.connect(self.show_filter_menu)
         header.setSectionsClickable(True)
+        header.sectionResized.connect(self.on_column_resize)
+        
+        # Handle window resize events
+        self.table.horizontalHeader().setStretchLastSection(True)  # Prevent horizontal scrollbar by default
         
         layout.addWidget(self.table)
         
@@ -80,10 +85,10 @@ class ParquetViewer(QMainWindow):
         self.dark_mode_action.triggered.connect(self.toggle_dark_mode)
         settings_menu.addAction(self.dark_mode_action)
         
-        # Clear all filters action
-        clear_filters_action = QAction("Clear All Filters", self)
-        clear_filters_action.triggered.connect(self.clear_all_filters)
-        settings_menu.addAction(clear_filters_action)
+        # Reset view action
+        reset_view_action = QAction("Reset View", self)
+        reset_view_action.triggered.connect(self.reset_view)
+        settings_menu.addAction(reset_view_action)
     
     def load_settings(self):
         """Load settings from config file"""
@@ -158,23 +163,75 @@ class ParquetViewer(QMainWindow):
                 text_to_copy = '\n'.join('\t'.join(row) for row in data)
                 QApplication.clipboard().setText(text_to_copy)
 
-    def update_header_style(self):
-        """Update header style to show filtered columns"""
+    def on_column_resize(self, logical_index, old_size, new_size):
+        """Handle manual column resize"""
+        try:
+            # Only enforce maximum width on manual resize
+            max_width = int(self.get_max_column_width())
+            min_width = max(int(self.get_min_column_width(logical_index)), 50)
+            
+            if new_size > max_width:
+                self.table.horizontalHeader().resizeSection(logical_index, max_width)
+            elif new_size < min_width:
+                self.table.horizontalHeader().resizeSection(logical_index, min_width)
+        except Exception:
+            # If resize fails, set to minimum width
+            self.table.horizontalHeader().resizeSection(logical_index, 50)
+
+    def get_max_column_width(self):
+        """Get maximum allowed column width (50% of table width)"""
+        viewport_width = max(self.table.viewport().width(), 100)  # Ensure minimum viewport width
+        return int(viewport_width * 0.5)
+
+    def get_min_column_width(self, column):
+        """Get minimum width needed for header text and filter indicator"""
+        header_item = self.table.horizontalHeaderItem(column)
+        if not header_item:
+            return 50  # Minimum default width
+            
+        text = header_item.text()
+        if column in self.filters and not text.endswith(' 🔍'):
+            text += ' 🔍'
+            
+        # Create a temporary label to measure text width
+        metrics = self.fontMetrics()
+        text_width = metrics.horizontalAdvance(text)
+        
+        # Add padding and ensure minimum width
+        return max(text_width + 20, 50)  # Minimum 50 pixels width
+
+    def clear_column_sort(self, column):
+        """Clear sorting for a specific column"""
         header = self.table.horizontalHeader()
-        for col in range(self.table.columnCount()):
-            item = self.table.horizontalHeaderItem(col)
-            if item:
-                text = item.text()
-                if col in self.filters:
-                    # Add a filter indicator to the header text
-                    if not text.endswith(' 🔍'):
-                        item.setText(f"{text} 🔍")
-                    item.setToolTip(f"Filter: {self.filters[col]}")
-                else:
-                    # Remove filter indicator if exists
-                    if text.endswith(' 🔍'):
-                        item.setText(text[:-2])
-                    item.setToolTip("")
+        current_sort_column = header.sortIndicatorSection()
+        
+        # Only clear if this column is currently sorted
+        if current_sort_column == column:
+            # Temporarily disable sorting to prevent automatic resort
+            self.table.setSortingEnabled(False)
+            
+            # Store the current data in original order
+            data = []
+            for row in range(self.table.rowCount()):
+                row_data = []
+                for col in range(self.table.columnCount()):
+                    item = self.table.item(row, col)
+                    row_data.append(item.text() if item else "")
+                data.append(row_data)
+            
+            # Clear the sort indicator
+            header.setSortIndicator(-1, Qt.AscendingOrder)
+            
+            # Restore the data in original order
+            for row in range(len(data)):
+                for col in range(len(data[row])):
+                    if data[row][col]:
+                        item = QTableWidgetItem(data[row][col])
+                        item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+                        self.table.setItem(row, col, item)
+            
+            # Re-enable sorting
+            self.table.setSortingEnabled(True)
 
     def show_filter_menu(self, pos):
         """Show filter menu for the clicked column"""
@@ -193,8 +250,10 @@ class ParquetViewer(QMainWindow):
         # Add filter options
         filter_action = menu.addAction("Filter...")
         clear_action = menu.addAction("Clear Filter")
+        clear_sort_column_action = menu.addAction("Clear Sorting")
         menu.addSeparator()
-        clear_all_action = menu.addAction("Clear All Filters")
+        clear_all_filters_action = menu.addAction("Clear All Filters")
+        clear_all_sort_action = menu.addAction("Clear All Sorting")
         
         # Show current filter if exists
         current_filter = self.filters.get(column)
@@ -239,14 +298,35 @@ class ParquetViewer(QMainWindow):
             self.filters.pop(column, None)
             self.apply_filters()
             self.update_header_style()
-        elif action == clear_all_action:
+        elif action == clear_sort_column_action:
+            self.clear_column_sort(column)
+        elif action == clear_all_filters_action:
             self.clear_all_filters()
+        elif action == clear_all_sort_action:
+            self.clear_sorting()
 
-    def clear_all_filters(self):
-        """Clear all active filters"""
-        self.filters.clear()
-        self.apply_filters()
-        self.update_header_style()
+    def update_header_style(self):
+        """Update header style to show filtered columns"""
+        header = self.table.horizontalHeader()
+        for col in range(self.table.columnCount()):
+            item = self.table.horizontalHeaderItem(col)
+            if item:
+                text = item.text()
+                if col in self.filters:
+                    # Add a filter indicator to the header text if not already present
+                    if not text.endswith(' 🔍'):
+                        item.setText(f"{text} 🔍")
+                        # Ensure column is wide enough for the new text
+                        min_width = self.get_min_column_width(col)
+                        current_width = header.sectionSize(col)
+                        if current_width < min_width:
+                            header.resizeSection(col, min_width)
+                    item.setToolTip(f"Filter: {self.filters[col]}")
+                else:
+                    # Remove filter indicator if exists
+                    if text.endswith(' 🔍'):
+                        item.setText(text[:-2])
+                    item.setToolTip("")
 
     def apply_filters(self):
         """Apply all active filters to the table"""
@@ -321,8 +401,8 @@ class ParquetViewer(QMainWindow):
                     item.setFlags(item.flags() & ~Qt.ItemIsEditable)
                     self.table.setItem(i, j, item)
             
-            # Resize columns to fit content
-            self.table.resizeColumnsToContents()
+            # Adjust column widths
+            self.adjust_all_columns()
             
             # Enable sorting after data is loaded
             self.table.setSortingEnabled(True)
@@ -434,6 +514,93 @@ class ParquetViewer(QMainWindow):
         if event.key() == Qt.Key_Escape:
             self.table.clearSelection()
         super().keyPressEvent(event)
+
+    def reset_view(self):
+        """Reset the view by clearing filters and sorting"""
+        self.clear_all_filters()
+        self.clear_sorting()
+
+    def clear_sorting(self):
+        """Clear all column sorting"""
+        self.table.sortItems(-1)  # -1 removes sorting from all columns
+
+    def clear_all_filters(self):
+        """Clear all active filters"""
+        self.filters.clear()
+        self.apply_filters()
+        self.update_header_style()
+
+    def resizeEvent(self, event):
+        """Handle window resize events"""
+        super().resizeEvent(event)
+        # Update column widths when window is resized
+        self.adjust_all_columns()
+
+    def adjust_all_columns(self):
+        """Adjust all column widths based on content and window size"""
+        if self.table.columnCount() == 0:
+            return
+            
+        viewport_width = self.table.viewport().width()
+        if viewport_width <= 0:
+            return  # Skip adjustment if viewport is not visible
+            
+        # First pass: get content widths
+        content_widths = []
+        total_content_width = 0
+        for col in range(self.table.columnCount()):
+            width = self.get_optimal_column_width(col)
+            content_widths.append(width)
+            total_content_width += width
+        
+        # Get available width
+        available_width = max(viewport_width, 100)  # Ensure minimum available width
+        max_column_width = int(available_width * 0.5)  # 50% of viewport width
+        min_column_width = 50  # Minimum column width
+        
+        # Second pass: adjust widths if they exceed limits
+        for col in range(self.table.columnCount()):
+            optimal_width = content_widths[col]
+            min_width = max(self.get_min_column_width(col), min_column_width)
+            # Ensure width is between minimum required and maximum allowed
+            final_width = int(min(max(optimal_width, min_width), max_column_width))
+            try:
+                self.table.setColumnWidth(col, final_width)
+            except Exception:
+                # If setting width fails, set to minimum width
+                self.table.setColumnWidth(col, min_column_width)
+
+    def get_optimal_column_width(self, column):
+        """Calculate optimal width based on content and header"""
+        font_metrics = self.fontMetrics()
+        padding = 30  # Padding for better readability
+        min_width = 50  # Minimum width
+        
+        # Get header width
+        header_width = 0
+        header_item = self.table.horizontalHeaderItem(column)
+        if header_item:
+            header_text = header_item.text()
+            if column in self.filters and not header_text.endswith(' 🔍'):
+                header_text += ' 🔍'  # Account for filter indicator
+            header_width = font_metrics.horizontalAdvance(header_text)
+        
+        # Get maximum content width
+        content_width = 0
+        for row in range(self.table.rowCount()):
+            item = self.table.item(row, column)
+            if item:
+                try:
+                    item_width = font_metrics.horizontalAdvance(item.text())
+                    content_width = max(content_width, item_width)
+                except Exception:
+                    continue
+        
+        # Use the larger of header or content width
+        optimal_width = max(header_width, content_width)
+        
+        # Add padding and ensure minimum width
+        return max(optimal_width + padding, min_width)
 
 def main():
     app = QApplication(sys.argv)
