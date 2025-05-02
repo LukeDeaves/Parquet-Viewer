@@ -275,7 +275,7 @@ class ParquetViewer(QMainWindow):
         self.save_as_action = QAction("Save As...", self)
         self.save_as_action.setShortcut("Ctrl+Shift+S")
         self.save_as_action.triggered.connect(self.save_file_as)
-        self.save_as_action.setEnabled(False)
+        self.save_as_action.setEnabled(True) # Keep Save As enabled
         self.file_menu.addAction(self.save_as_action)
         
         self.file_menu.addSeparator()
@@ -441,7 +441,7 @@ class ParquetViewer(QMainWindow):
         
         # Update UI elements
         self.save_action.setEnabled(False)
-        self.save_as_action.setEnabled(self.edit_mode)
+        self.save_as_action.setEnabled(True)
         self.update_undo_redo_state()
         self.update_status_bar()
 
@@ -2325,7 +2325,6 @@ class ParquetViewer(QMainWindow):
         # Update UI
         self.setWindowTitle("Untitled - Parquet File Viewer")
         self.save_action.setEnabled(False)
-        self.save_as_action.setEnabled(True)
         self.update_status_bar()
         
         # Enable edit mode automatically for new files
