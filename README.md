@@ -1,6 +1,6 @@
 # Parquet File Viewer
 
-A desktop application for viewing, editing, and analysing Parquet files.
+A desktop application for viewing, editing, and creating Parquet files.
 
 ## Features
 
