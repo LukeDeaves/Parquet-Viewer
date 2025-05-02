@@ -216,6 +216,7 @@ class ParquetViewer(QMainWindow):
         
         # Store column sort states
         self.column_sort_states = {}  # {column_index: is_ascending}
+        self.populating_new_column = False # Flag for adding new column
 
     def init_actions(self):
         """Initialize all actions"""
@@ -447,7 +448,7 @@ class ParquetViewer(QMainWindow):
 
     def on_cell_changed(self, item):
         """Handle cell content changes"""
-        if not self.edit_mode or self.updating_totals or self.applying_delete:  # Check the new flag
+        if not self.edit_mode or self.updating_totals or self.applying_delete or self.populating_new_column: # Check the new flag
             return
             
         row = item.row()
@@ -2263,8 +2264,11 @@ class ParquetViewer(QMainWindow):
             else:
                 col_idx = position
 
+            # Explicitly cast to int just in case
+            loc_index = int(col_idx)
+
             # Insert into DataFrame at the correct position
-            self.original_df.insert(loc=col_idx, column=column_name, 
+            self.original_df.insert(loc=loc_index, column=column_name,
                                   value=pd.Series([default_value] * len(self.original_df), dtype=dtype))
             self.column_types[column_name] = dtype
             
@@ -2273,21 +2277,25 @@ class ParquetViewer(QMainWindow):
             self.table.setHorizontalHeaderItem(col_idx, QTableWidgetItem(column_name))
             
             # Populate new column cells
-            for row in range(self.table.rowCount()): # Includes totals row if applicable
-                item = QTableWidgetItem()
-                if default_value is not None:
-                    if isinstance(default_value, (int, float)):
-                        item.setText(f"{default_value:,}")
-                        item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-                    else:
-                        item.setText(str(default_value))
-                
-                # Ensure item editability matches current edit mode
-                item.setFlags(item.flags() & ~Qt.ItemIsEditable) # Start as non-editable
-                if self.edit_mode:
-                    item.setFlags(item.flags() | Qt.ItemIsEditable)
+            self.populating_new_column = True # Set flag
+            try:
+                for row in range(self.table.rowCount()): # Includes totals row if applicable
+                    item = QTableWidgetItem()
+                    if default_value is not None:
+                        if isinstance(default_value, (int, float)):
+                            item.setText(f"{default_value:,}")
+                            item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                        else:
+                            item.setText(str(default_value))
                     
-                self.table.setItem(row, col_idx, item)
+                    # Ensure item editability matches current edit mode
+                    item.setFlags(item.flags() & ~Qt.ItemIsEditable) # Start as non-editable
+                    if self.edit_mode:
+                        item.setFlags(item.flags() | Qt.ItemIsEditable)
+                        
+                    self.table.setItem(row, col_idx, item)
+            finally:
+                self.populating_new_column = False # Reset flag
             
             # Update modified state
             self.modified = True
