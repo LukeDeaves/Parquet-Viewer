@@ -18,4 +18,4 @@ __pycache__/
 # build artifacts
 build/
 dist/
-dist_nuitka/
+*.spec
