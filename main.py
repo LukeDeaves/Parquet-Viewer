@@ -2091,31 +2091,50 @@ class ParquetViewer(QMainWindow):
             self.update_column_totals()
 
     def insert_row(self, row_index):
-        """Insert a new row at the specified index"""
+        """Insert a new row at the specified index using pd.concat"""
         if not self.edit_mode:
             return
             
-        # Insert into DataFrame
-        self.original_df.loc[row_index + 0.5] = pd.Series([None] * len(self.original_df.columns), index=self.original_df.columns)
-        self.original_df = self.original_df.sort_index().reset_index(drop=True)
+        # Create a DataFrame for the new row with None values
+        # Use existing columns to ensure alignment
+        new_row_data = {col: [None] for col in self.original_df.columns}
+        new_row_df = pd.DataFrame(new_row_data, index=[row_index]) # Assign index for potential sorting later if needed
+
+        # Ensure new row DataFrame dtypes match original where possible (especially for non-object types)
+        # This helps pandas concat logic but None will likely still result in object/float types initially
+        for col in self.original_df.columns:
+            if self.original_df[col].dtype != 'object':
+                try:
+                    # Attempt conversion, fallback to object if None causes issues
+                    new_row_df[col] = new_row_df[col].astype(self.original_df[col].dtype)
+                except (TypeError, ValueError):
+                     # If conversion fails (e.g., None to int), keep as default (likely object)
+                     pass 
+
+        # Split original DataFrame
+        df_top = self.original_df.iloc[:row_index]
+        df_bottom = self.original_df.iloc[row_index:]
         
-        # Insert into table
+        # Concatenate the parts
+        self.original_df = pd.concat([df_top, new_row_df, df_bottom], ignore_index=True)
+        
+        # Insert row visually into the QTableWidget
         self.table.insertRow(row_index)
         
-        # Add empty cells
+        # Add empty cells to the new row in the table
         for col in range(self.table.columnCount()):
-            item = QTableWidgetItem()
+            item = QTableWidgetItem("") # Start with empty string
+            # Set flags based on edit mode
+            item.setFlags(item.flags() & ~Qt.ItemIsEditable) # Start non-editable
             if self.edit_mode:
                 item.setFlags(item.flags() | Qt.ItemIsEditable)
             self.table.setItem(row_index, col, item)
         
-        # Update modified state
+        # Update state
         self.modified = True
         self.save_action.setEnabled(True)
         self.update_status_bar()
-        
-        # Update column totals
-        self.update_column_totals()
+        self.update_column_totals() # Update totals after insertion
 
     def delete_row(self, row):
         """Delete a row from the table and DataFrame"""
