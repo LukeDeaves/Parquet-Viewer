@@ -448,7 +448,7 @@ class ParquetViewer(QMainWindow):
 
     def on_cell_changed(self, item):
         """Handle cell content changes"""
-        if not self.edit_mode or self.updating_totals or self.applying_delete or self.populating_new_column: # Check the new flag
+        if not self.edit_mode or self.updating_totals or self.applying_delete or self.populating_new_column:
             return
             
         row = item.row()
@@ -460,8 +460,17 @@ class ParquetViewer(QMainWindow):
             col_name = self.table.horizontalHeaderItem(col).text()
             dtype = self.column_types.get(col_name)
             
-            # Store the old value before making changes
-            old_value = self.original_df.iloc[row, col]
+            # Get the old value - handle case where DataFrame might be empty
+            try:
+                old_value = self.original_df.iloc[row, col]
+            except (IndexError, KeyError):
+                # If this is a new file/empty DataFrame, initialize it properly
+                if len(self.original_df) == 0:
+                    self.original_df = pd.DataFrame(columns=self.original_df.columns)
+                # Extend DataFrame if needed
+                while len(self.original_df) <= row:
+                    self.original_df.loc[len(self.original_df)] = [None] * len(self.original_df.columns)
+                old_value = None
             
             # Skip if the value hasn't actually changed
             if pd.isna(new_value) and pd.isna(old_value):
