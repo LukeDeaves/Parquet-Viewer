@@ -564,29 +564,25 @@ class ParquetViewer(QMainWindow):
 
     def update_status_bar(self):
         """Update status bar with current state and consistent separators"""
-        separator = "  |  " # Define the separator
-        
-        # 1. Get Stats Text (already set by calculate_selection_stats)
-        stats_text = self.stats_label.text()
-        
-        # 2. Set Edit Mode Text
+        # --- Get Raw Texts --- 
+        # Stats text is set by calculate_selection_stats, read it
+        stats_text = self.stats_label.text() 
         edit_mode_raw_text = "Edit Mode: ON" if self.edit_mode else "Edit Mode: OFF"
-        # Add separator if stats_text exists
-        edit_mode_display_text = separator + edit_mode_raw_text if stats_text else edit_mode_raw_text
-        self.edit_mode_label.setText(edit_mode_display_text)
-            
-        # 3. Set Modified Text
         modified_raw_text = "Modified" if self.modified else ""
-        # Need to check if the edit_mode_label *actually has text* before adding separator
-        current_edit_mode_text = self.edit_mode_label.text() 
-        
-        # Add separator only if edit mode label has text AND modified status is true
-        if current_edit_mode_text and self.modified:
-            modified_display_text = separator + modified_raw_text
-        else:
-            modified_display_text = modified_raw_text # Show only "Modified" or nothing
-            
-        self.modified_label.setText(modified_display_text)
+
+        # --- Set Label Texts with Separators --- 
+
+        # 1. Stats Label (no prefix)
+        self.stats_label.setText(stats_text)
+
+        # 2. Edit Mode Label
+        # Add separator *only* if stats_text is not empty
+        self.edit_mode_label.setText(edit_mode_raw_text)
+
+        # 3. Modified Label
+        # Add separator *only* if modified_raw_text is not empty (i.e., self.modified is True)
+        # The Edit Mode label is always visible, so we don't need to check it.
+        self.modified_label.setText(modified_raw_text)
 
         # Apply style for modified text
         if self.modified:
@@ -594,7 +590,7 @@ class ParquetViewer(QMainWindow):
         else:
             self.modified_label.setStyleSheet("")
 
-        # 4. Update window title
+        # --- Update window title --- 
         title_prefix = "*" if self.modified else ""
         file_display_name = os.path.basename(self.current_file) if self.current_file else "Untitled"
         if self.current_file:
@@ -2004,13 +2000,18 @@ class ParquetViewer(QMainWindow):
                             continue
         
         # Format the statistics string
-        stats_text = f"Count: {total_cells:,}"
+        separator = "  |  " # Use consistent separator
+        stats_parts = []
+        stats_parts.append(f"Count: {total_cells:,}")
         
         if numeric_values: # Only show sum/avg if there are numeric values
             sum_val = sum(numeric_values)
             avg = sum_val / len(numeric_values)
-            stats_text += f" | Sum: {sum_val:,.2f}"
-            stats_text += f" | Average: {avg:,.2f}"
+            stats_parts.append(f"Sum: {sum_val:,.2f}")
+            stats_parts.append(f"Average: {avg:,.2f}")
+            
+        # Join parts with the separator
+        stats_text = separator.join(stats_parts)
             
         # Update the status bar label
         self.stats_label.setText(stats_text)
@@ -2162,7 +2163,7 @@ class ParquetViewer(QMainWindow):
             self.update_column_totals()
 
     def add_new_column(self, position=None):
-        """Add a new column to the table and DataFrame"""
+        """Add a new column to the table and DataFrame at the specified position."""
         if not self.edit_mode:
             return
             
@@ -2217,34 +2218,43 @@ class ParquetViewer(QMainWindow):
             dtype = dtype_map[type_combo.currentText()]
             
             # Get default value
-            default_value = default_input.text().strip()
-            try:
-                if default_value:
+            default_value_str = default_input.text().strip()
+            default_value = None
+            if default_value_str:
+                try:
                     if dtype == "int64":
-                        default_value = int(default_value)
+                        default_value = int(float(default_value_str.replace(',', '')))
                     elif dtype == "float64":
-                        default_value = float(default_value)
+                        default_value = float(default_value_str.replace(',', ''))
                     elif dtype == "bool":
-                        default_value = default_value.lower() in ['true', '1', 'yes']
+                        default_value = default_value_str.lower() in ['true', '1', 'yes']
                     elif dtype == "datetime64[ns]":
-                        default_value = pd.to_datetime(default_value)
-                else:
-                    default_value = None
-            except (ValueError, TypeError) as e:
-                QMessageBox.warning(self, "Error", f"Invalid default value for selected type: {str(e)}")
-                return
-                
-            # Add to DataFrame
-            self.original_df[column_name] = pd.Series([default_value] * len(self.original_df), dtype=dtype)
+                        default_value = pd.to_datetime(default_value_str)
+                    else: # Text
+                        default_value = default_value_str
+                except (ValueError, TypeError) as e:
+                    QMessageBox.warning(self, "Error", f"Invalid default value for selected type: {str(e)}")
+                    return
+            
+            # Determine insertion index
+            # If position is None or out of bounds, insert at the end
+            num_cols = self.table.columnCount()
+            if position is None or not (0 <= position <= num_cols):
+                col_idx = num_cols
+            else:
+                col_idx = position
+
+            # Insert into DataFrame at the correct position
+            self.original_df.insert(loc=col_idx, column=column_name, 
+                                  value=pd.Series([default_value] * len(self.original_df), dtype=dtype))
             self.column_types[column_name] = dtype
             
-            # Add to table
-            col_idx = self.table.columnCount()
+            # Insert column into the table at the correct position
             self.table.insertColumn(col_idx)
             self.table.setHorizontalHeaderItem(col_idx, QTableWidgetItem(column_name))
             
-            # Populate column
-            for row in range(self.table.rowCount() - 1):  # Exclude totals row
+            # Populate new column cells
+            for row in range(self.table.rowCount()): # Includes totals row if applicable
                 item = QTableWidgetItem()
                 if default_value is not None:
                     if isinstance(default_value, (int, float)):
@@ -2254,10 +2264,9 @@ class ParquetViewer(QMainWindow):
                         item.setText(str(default_value))
                 
                 # Ensure item editability matches current edit mode
+                item.setFlags(item.flags() & ~Qt.ItemIsEditable) # Start as non-editable
                 if self.edit_mode:
                     item.setFlags(item.flags() | Qt.ItemIsEditable)
-                else:
-                    item.setFlags(item.flags() & ~Qt.ItemIsEditable)
                     
                 self.table.setItem(row, col_idx, item)
             
@@ -2266,7 +2275,7 @@ class ParquetViewer(QMainWindow):
             self.save_action.setEnabled(True)
             self.update_status_bar()
             
-            # Update column totals
+            # Update column totals (which will also handle totals row formatting)
             self.update_column_totals()
             
             # Adjust column width
