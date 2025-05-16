@@ -25,7 +25,7 @@ A desktop application for viewing, editing, and creating Parquet files.
 ## Installation
 
 1. Download the latest release from [GitHub Releases](https://github.com/LukeDeaves/Parquet-Viewer/tags).
-2. Extract the zip asset file and run the `Parquet Viewer.exe` file. Note that this method may trigger the [⚠️ Windows Defender/SmartScreen Warning](#⚠️-windows-defendersmartscreen-warning).
+2. Extract the zip asset file and run the `Parquet Viewer.exe` file. Note that this method may trigger the [⚠️ Windows Defender/SmartScreen Warning](#%EF%B8%8F-windows-defendersmartscreen-warning).
 
 ## Usage
 
