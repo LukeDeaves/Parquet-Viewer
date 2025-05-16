@@ -28,7 +28,7 @@ A desktop application for viewing, editing, and creating Parquet files.
 2. Extract the zip asset file and run the `Parquet Viewer.exe` file.
 
 > [!IMPORTANT]
-> Note that this method may trigger the [⚠️ Windows Defender/SmartScreen Warning](#%EF%B8%8F-windows-defendersmartscreen-warning).
+> This method may trigger the [⚠️ Windows Defender/SmartScreen Warning](#%EF%B8%8F-windows-defendersmartscreen-warning)
 
 ## Usage
 
