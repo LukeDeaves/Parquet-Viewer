@@ -18,11 +18,9 @@ A desktop application for viewing, editing, and creating Parquet files.
 
 ## Requirements
 
-- Python 3.8 or higher
 - Operating System:
-    - Windows
-    - macOS _[Untested]_
-    - Linux _[Untested]_
+   - Windows 11 or later
+   - Windows 10 or earlier _(functionality not guaranteed)_
 
 ## Installation
 
