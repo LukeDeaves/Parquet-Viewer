@@ -61,7 +61,7 @@ if (Test-Path $exeSource) {
     if (Test-Path $cleanBuildScript) {
         & $cleanBuildScript
     } else {
-        Write-Error "clean_build.ps1 not found in the current directory."
+        Write-Error "clean_build.ps1 not found in the current directory: $currentDir"
     }
 } else {
     Write-Output "$outputName not found in $outputDir"
