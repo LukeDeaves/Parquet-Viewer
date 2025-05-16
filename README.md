@@ -44,18 +44,4 @@ A desktop application for viewing, editing, and creating Parquet files.
 5. Use the status bar to view statistics about selected data
 6. Save your changes using File > Save or Save As
 
-To create a standalone executable for `Parquet Viewer.exe` in the `dist` directory, you can compile the project using one of the following methods:
-
-**Using PyInstaller:**
-   ```
-   pyinstaller --onefile --windowed --name "Parquet Viewer" main.py
-   ```
-   - **File Size:** Larger executable size
-   - **Summary:** PyInstaller offers a faster compilation process, but it produces larger executable files that are more susceptible to reverse engineering.
-
-**Using Nuitka:**
-   ```
-   nuitka --standalone --onefile --windows-console-mode=disable --enable-plugin=pyqt5 main.py --output-filename="Parquet Viewer.exe" --output-dir=dist
-   ```
-   - **File Size:** Smaller executable size
-   - **Summary:** Nuitka transforms Python code into optimized C++ code, producing more efficient executables with reduced file sizes and improved performance.
+> **Tip:** To create a standalone executable for `Parquet Viewer.exe` in the `dist` directory, you can run the PowerShell script `.\tools\run_build.ps1`
