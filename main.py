@@ -1145,6 +1145,10 @@ class ParquetViewer(QMainWindow):
                     
                 numeric_values = []
                 for row in range(self.table.rowCount()):
+                    # Skip hidden rows
+                    if self.table.isRowHidden(row):
+                        continue
+                        
                     item = self.table.item(row, col)
                     if item:
                         try:
