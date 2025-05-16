@@ -57,11 +57,11 @@ if (Test-Path $exeSource) {
     Write-Output "Moved $outputName to $outputFolder"
     
     # Run clean_build.ps1 if the .exe was successfully moved
-    $cleanBuildScript = Join-Path -Path $currentDir -ChildPath "clean_build.ps1"
+    $cleanBuildScript = Join-Path -Path $currentDir -ChildPath "tools\clean_build.ps1"
     if (Test-Path $cleanBuildScript) {
         & $cleanBuildScript
     } else {
-        Write-Error "clean_build.ps1 not found in the current directory: $currentDir"
+        Write-Error "clean_build.ps1 not found in the current directory."
     }
 } else {
     Write-Output "$outputName not found in $outputDir"
