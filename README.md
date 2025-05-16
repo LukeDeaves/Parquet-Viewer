@@ -27,9 +27,9 @@ A desktop application for viewing, editing, and creating Parquet files.
 ## Installation
 
 1. Clone this repository
-2. Install the required dependencies:
+2. Run the setup script to install the required dependencies:
    ```
-   pip install -r requirements.txt
+   .\tools\setup_machine.ps1
    ```
 
 ## Usage
