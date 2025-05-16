@@ -36,7 +36,7 @@ A desktop application for viewing, editing, and creating Parquet files.
 
 1. Run the application:
    ```
-   python main.py
+   .\tools\run_application.ps1
    ```
 2. Use File > Open to open a Parquet file
 3. Navigate and edit data in the table view
