@@ -19,8 +19,8 @@ A desktop application for viewing, editing, and creating Parquet files.
 ## Requirements
 
 - Operating System:
-   - Windows 11 or later
-   - Windows 10 or earlier _(functionality not guaranteed)_
+   - Windows 8 or later
+   - Windows 7 or earlier _(functionality not guaranteed)_
 
 ## Installation
 
@@ -42,6 +42,7 @@ A desktop application for viewing, editing, and creating Parquet files.
 
 ### Additional Requirements
 
+- Windows PowerShell 3.0 _(earlier PowerShell versions are untested)_
 - Python 3.8 or higher
 
 ### Advanced Installation
