@@ -44,4 +44,5 @@ A desktop application for viewing, editing, and creating Parquet files.
 5. Use the status bar to view statistics about selected data
 6. Save your changes using File > Save or Save As
 
-> **Tip:** To create a standalone executable for `Parquet Viewer.exe` in the `dist` directory, you can run the PowerShell script `.\tools\run_build.ps1`
+> [!TIP]
+> To create a standalone executable for `Parquet Viewer.exe` in the `dist` directory, you can run the PowerShell script `.\tools\run_build.ps1`
