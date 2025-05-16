@@ -19,3 +19,5 @@ __pycache__/
 build/
 dist/
 *.spec
+build_output/
+*crash-report.xml
